@@ -20,18 +20,17 @@
 # ##### END GPL LICENSE BLOCK #####
 
 if "bpy" in locals():
-    import imp
+    import importlib
     if "m3" in locals():
-        imp.reload(m3)
+        importlib.reload(m3)
     if "shared" in locals():
-        imp.reload(shared)
+        importlib.reload(shared)
 
 from . import m3
 from . import shared
 import bpy
 import mathutils
 import math
-from bpy_extras import io_utils
 from os import path
 
 
@@ -144,7 +143,7 @@ def visualizeMatrix(matrix, at3DCursor):
     mesh = bpy.data.meshes.new('AxisMesh')
     meshObject = bpy.data.objects.new('AxisMesh', mesh)
     if at3DCursor:
-        meshObject.location = scene.cursor_location
+        meshObject.location = scene.cursor.location
     else:
         meshObject.location = (0,0,0)
     meshObject.show_name = True
@@ -155,7 +154,7 @@ def visualizeMatrix(matrix, at3DCursor):
     zVertex = oVertex + matrix3x3.col[2]
     vertices = [oVertex, xVertex,yVertex,zVertex]
     edges = [(0,1),(0,2),(0,3)]
-    bpy.context.scene.objects.link(meshObject)
+    bpy.context.scene.collection.objects.link(meshObject)
     mesh.from_pydata(vertices, edges, [])
     mesh.update(calc_edges=True)
     
@@ -238,7 +237,7 @@ def determineAbsoluteBoneRestPositions(model):
     for inverseBoneRestPosition in model.absoluteInverseBoneRestPositions:
         matrix = toBlenderMatrix(inverseBoneRestPosition.matrix)
         matrix = matrix.inverted()
-        matrix = matrix * shared.rotFixMatrix        
+        matrix = matrix @ shared.rotFixMatrix
         matrices.append(matrix)
     return matrices
 
@@ -470,10 +469,10 @@ class Importer:
         #alternative: armature = bpy.ops.object.armature_add(view_align=False,enter_editmode=False, location=location, rotation=(0,0,0), layers=firstLayerOnly)
         scene = bpy.context.scene
         armatureObject = bpy.data.objects.new("Armature Object", self.armature)
-        armatureObject.location = scene.cursor_location
-        scene.objects.link(armatureObject)
-        scene.objects.active = armatureObject
-        armatureObject.select = True
+        armatureObject.location = scene.cursor.location
+        scene.collection.objects.link(armatureObject)
+        bpy.context.view_layer.objects.active = armatureObject
+        armatureObject.select_set(True)
         self.armatureObject = armatureObject
 
         
@@ -558,13 +557,13 @@ class Importer:
             if bone.parent != -1:
                 # TODO perforamcne optimization: cache bindScaleMatrices[bone.parent].inverted()
                 # TODO find out why it's just the scale that need to be applied
-                leftCorrectionMatrix = relEditBoneMatrix.inverted() * shared.rotFixMatrixInverted * bindScaleMatrices[bone.parent].inverted()
+                leftCorrectionMatrix = relEditBoneMatrix.inverted() @ shared.rotFixMatrixInverted @ bindScaleMatrices[bone.parent].inverted()
             else:
                 leftCorrectionMatrix = relEditBoneMatrix.inverted()
-            rightCorrectionMatrix = bindMatrix * shared.rotFixMatrix
+            rightCorrectionMatrix = bindMatrix @ shared.rotFixMatrix
 
             poseBoneTransform = shared.locRotScaleMatrix(location, rotation, scale)
-            poseBoneTransform = leftCorrectionMatrix * poseBoneTransform * rightCorrectionMatrix
+            poseBoneTransform = leftCorrectionMatrix @ poseBoneTransform @ rightCorrectionMatrix
             location, rotation, scale = poseBoneTransform.decompose()
 
             poseBone.scale = scale
@@ -607,7 +606,7 @@ class Importer:
             scale = toBlenderVector3(scale)
             relSpecifiedMatrix = shared.locRotScaleMatrix(location, rotation, scale)
 
-            newMatrix = leftCorrectionMatrix * relSpecifiedMatrix * rightCorrectionMatrix
+            newMatrix = leftCorrectionMatrix @ relSpecifiedMatrix @ rightCorrectionMatrix
             location, rotation, scale = newMatrix.decompose()
             timeToLocationMap[timeInMS] = location
             timeToRotationMap[timeInMS] = rotation
@@ -1131,10 +1130,10 @@ class Importer:
                     mesh.m3_physics_mesh = True
                     
                     meshObject = bpy.data.objects.new('PhysicsMeshObject', mesh)
-                    meshObject.location = scene.cursor_location
+                    meshObject.location = scene.cursor.location
                     meshObject.show_name = True
                     
-                    scene.objects.link(meshObject)
+                    scene.collection.objects.link(meshObject)
                     
                     physics_shape.meshObjectName = meshObject.name
                 
@@ -1292,9 +1291,9 @@ class Importer:
                     preferedMeshName = self.model.bones[boneIndexLookup[0]].name
                 mesh = bpy.data.meshes.new(preferedMeshName)
                 meshObject = bpy.data.objects.new(preferedMeshName, mesh)
-                meshObject.location = self.scene.cursor_location
+                meshObject.location = self.scene.cursor.location
                 meshObject.show_name = True
-                self.scene.objects.link(meshObject)
+                self.scene.collection.objects.link(meshObject)
 
                 mesh.m3_material_name = self.getNameOfMaterialWithReferenceIndex(m3Object.materialReferenceIndex)
                 
@@ -1352,6 +1351,7 @@ class Importer:
                 # the old face indices however are still later required to figure out
                 # what Uv coordinates a face has.
                 trianglesWithNewIndices = []
+                oldIndicesForNewTriangles = []
                 for faceWithOldIndices in tranglesWithOldIndices:
                     i0 = oldVertexIndexToNewVertexIndexMap[faceWithOldIndices[0]]
                     i1 = oldVertexIndexToNewVertexIndexMap[faceWithOldIndices[1]]
@@ -1360,57 +1360,21 @@ class Importer:
                     if isATriangle:
                         faceWithNewIndices = (i0, i1, i2)
                         trianglesWithNewIndices.append(faceWithNewIndices)
+                        oldIndicesForNewTriangles.append(faceWithOldIndices)
                     
                 
-                mesh.vertices.add(len(vertexPositions))
-                mesh.vertices.foreach_set("co", io_utils.unpack_list(vertexPositions))
-
-                triangleCount = len(trianglesWithNewIndices)
-                mesh.polygons.add(triangleCount)
-                mesh.loops.add(triangleCount * 3)
-                mesh.polygons.foreach_set("loop_start", range(0, triangleCount * 3, 3))
-                mesh.polygons.foreach_set("loop_total", (3,) * triangleCount)
-                mesh.loops.foreach_set("vertex_index", io_utils.unpack_list(trianglesWithNewIndices))
-
-                #mesh.tessfaces.add(len(trianglesWithNewIndices))
-                #mesh.tessfaces.foreach_set("vertices_raw", io_utils.unpack_face_list(trianglesWithNewIndices))
-                
-                def getUVsFor(newVertexIndex, vertexUVAttribute, setOfOldVertexIndicesOfFace):
-                    oldVertexIndices = newVertexIndexToOldVertexIndicesMap[newVertexIndex]
-                    # When multiple vertices got merged to single one, it's still important to determine
-                    # the correct old vertex index, in order to get correct uvs.
-                    matchingOldVertexIndices = oldVertexIndices.intersection(setOfOldVertexIndicesOfFace)
-                    if len(matchingOldVertexIndices) != 1:
-                        raise Exception("There was a problem with calculating which UV belongs to which vertex: matching vertices %s; newToOldIndices: %s, triangle: %s" % (len(matchingOldVertexIndices), oldVertexIndices, setOfOldVertexIndicesOfFace))
-                    oldVertexIndex = matchingOldVertexIndices.pop()
-                    return toBlenderUVCoordinate(getattr(m3Vertices[oldVertexIndex],vertexUVAttribute))
+                mesh.from_pydata(vertexPositions, [], trianglesWithNewIndices)
+                mesh.update()
                 
                 for vertexUVAttribute in ["uv0", "uv1", "uv2", "uv3"]:
                     if vertexStructureDescription.hasField(vertexUVAttribute):
-                        uvTexture = mesh.uv_textures.new()
-                        uvLayer = mesh.uv_layers[len(mesh.uv_layers)-1]
-                        for faceIndex, polygon in enumerate(mesh.polygons):
-                            oldIndices = tranglesWithOldIndices[faceIndex]
+                        uvLayer = mesh.uv_layers.new(name=vertexUVAttribute)
+                        for polygon, oldIndices in zip(mesh.polygons, oldIndicesForNewTriangles):
                             for i in range(3):
                                 uvLayer.data[polygon.loop_start + i].uv = toBlenderUVCoordinate(getattr(m3Vertices[oldIndices[i]],vertexUVAttribute))
-                            
-                            
-                        if False:# old:
-                            uvLayer = mesh.tessface_uv_textures.new()
-
-                            for faceIndex in range(len(trianglesWithNewIndices)):
-                                tessFace = mesh.tessfaces[faceIndex]
-                                faceUV = uvLayer.data[faceIndex]
-                                setOfOldVertexIndicesOfFace = set(tranglesWithOldIndices[faceIndex])
-                                # It's necessary to take vertex indices from tessface
-                                # Since the vertex indices may get reordered within a triangle
-                                faceUV.uv1 = getUVsFor(tessFace.vertices[0], vertexUVAttribute, setOfOldVertexIndicesOfFace)
-                                faceUV.uv2 = getUVsFor(tessFace.vertices[1], vertexUVAttribute, setOfOldVertexIndicesOfFace)
-                                faceUV.uv3 = getUVsFor(tessFace.vertices[2], vertexUVAttribute, setOfOldVertexIndicesOfFace)
-
 
                 mesh.validate()   
-                mesh.update(calc_edges=True)    
+                mesh.update()
                 
                 shouldCreateVertexGroups = self.scene.m3_import_options.contentToImport != "MESH_WITH_MATERIALS_ONLY"
                 if shouldCreateVertexGroups:
@@ -1444,11 +1408,11 @@ class Importer:
                     # Remove doubles after marking the sharp edges
                     # since the sharp edge detection algrithm depend on it
                     bpy.ops.object.select_all(action='DESELECT')
-                    self.scene.objects.active = meshObject
-                    meshObject.select = True
+                    bpy.context.view_layer.objects.active = meshObject
+                    meshObject.select_set(True)
                     bpy.ops.object.mode_set(mode='EDIT') 
                     bpy.ops.mesh.select_all(action='SELECT') 
-                    bpy.ops.mesh.remove_doubles()    
+                    bpy.ops.mesh.merge_by_distance()
 
 
                 self.setOriginToCenter(meshObject)
@@ -1469,8 +1433,8 @@ class Importer:
     def setOriginToCenter(self, meshObject):
         bpy.ops.object.mode_set(mode='OBJECT')
         bpy.ops.object.select_all(action='DESELECT')
-        self.scene.objects.active = meshObject
-        meshObject.select = True
+        bpy.context.view_layer.objects.active = meshObject
+        meshObject.select_set(True)
         bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='MEDIAN')
     
 
@@ -1522,7 +1486,7 @@ class Importer:
             if boneEntry.parent != -1:
                 parentEditBone = editBones[boneEntry.parent]
                 absParentEditBoneMatrix = parentEditBone.matrix
-                relEditBoneMatrix = absParentEditBoneMatrix.inverted() * absEditBoneMatrix 
+                relEditBoneMatrix = absParentEditBoneMatrix.inverted() @ absEditBoneMatrix
             else:
                 relEditBoneMatrix = absEditBoneMatrix
             relEditBoneMatrices.append(relEditBoneMatrix)
@@ -1615,9 +1579,9 @@ class Importer:
         else:
             stripName = trackName
             action = bpy.data.actions.new(objectWithAnimationData.name + animation.name)
-            action.id_root = shared.typeIdOfObject(objectWithAnimationData)
+            shared.getActionChannelbag(action, objectWithAnimationData, create=True)
             strip = track.strips.new(name=stripName, start=0, action=action)
-        return action
+        return shared.getActionChannelbag(action, objectWithAnimationData, create=True)
     
     def findSimulateFrame(self, animIdToTimeValueMap):
         # Hack:
@@ -1872,7 +1836,7 @@ def boneRotMatrix(head, tail, roll):
             (0, 0, 1)))
     
     rMatrix = mathutils.Matrix.Rotation(roll, 3, v)
-    return rMatrix *bMatrix
+    return rMatrix @ bMatrix
 
 def boneMatrix(head, tail, roll):
     """unused: how blender calculates the matrix of a bone """

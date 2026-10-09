@@ -25,20 +25,21 @@ bl_info = {
     "location": "Properties Editor -> Scene -> M3 Panels",
     "description": "Allows to export (and import) simple Starcraft 2 models (.m3) with particle systems. Use on own risk!",
     "category": "Import-Export",
-    "wiki_url": "http://wiki.blender.org/index.php/Dev:2.5/Py/Scripts/Import-Export/m3addon",
+    "version": (1, 0, 0),
+    "blender": (5, 2, 0),
     "tracker_url": "https://github.com/flo/m3addon/issues?state=open"
 }
 
 if "bpy" in locals():
-    import imp
+    import importlib
     if "m3import" in locals():
-            imp.reload(m3import)
+            importlib.reload(m3import)
             
     if "m3export" in locals():
-            imp.reload(m3export)
+            importlib.reload(m3export)
             
     if "shared" in locals():
-        imp.reload(shared)
+        importlib.reload(shared)
 
 from . import shared
 import bpy
@@ -533,13 +534,17 @@ def prepareDefaultValuesForNewAction(objectWithAnimationData, newAction):
         raise Exception("Must have animation data")
     oldAction = animationData.action
     if oldAction != None:
-        for curve in oldAction.fcurves:
+        for curve in shared.getActionFCurves(oldAction, objectWithAnimationData):
             oldAnimatedProperties.add((curve.data_path, curve.array_index))
     newAnimatedProperties = set()
     if newAction != None:
-        for curve in newAction.fcurves:
+        newActionFCurves = shared.getActionFCurves(newAction, objectWithAnimationData)
+        for curve in newActionFCurves:
             newAnimatedProperties.add((curve.data_path, curve.array_index))    
     defaultAction = shared.getOrCreateDefaultActionFor(objectWithAnimationData)
+    defaultActionFCurves = shared.getActionFCurves(
+        defaultAction, objectWithAnimationData, create=True
+    )
 
     removedProperties = set()
 
@@ -562,16 +567,16 @@ def prepareDefaultValuesForNewAction(objectWithAnimationData, newAction):
     
     removedCurves = list()
     if newAction != None:
-        for curve in newAction.fcurves:
+        for curve in newActionFCurves:
             if (curve.data_path, curve.array_index) in removedProperties:
                 removedCurves.append(curve)
     for removedCurve in removedCurves:
-        newAction.fcurves.remove(removedCurve)
+        newActionFCurves.remove(removedCurve)
     
     
     defaultsToRemove = set()
     
-    for curve in defaultAction.fcurves:
+    for curve in defaultActionFCurves:
         prop = (curve.data_path, curve.array_index)
         if prop in propertiesBecomingUnanimated:
             defaultValue = curve.evaluate(0)
@@ -594,11 +599,11 @@ def prepareDefaultValuesForNewAction(objectWithAnimationData, newAction):
             else:
                 defaultsToRemove.add(prop)
     removedDefaultCurves = list()
-    for curve in defaultAction.fcurves:
+    for curve in defaultActionFCurves:
         if (curve.data_path, curve.array_index) in removedProperties:
             removedDefaultCurves.append(curve)
     for removedDefaultCurve in removedDefaultCurves:
-        defaultAction.fcurves.remove(removedDefaultCurve)   
+        defaultActionFCurves.remove(removedDefaultCurve)
 
 def getAttribute(obj, curvePath, curveIndex):
     """Gets the value of an attribute via animation path and index"""
@@ -808,8 +813,8 @@ def selectBone(scene, boneName):
     if bpy.ops.object.select_all.poll():
         bpy.ops.object.select_all(action='DESELECT')
     
-    armature.select = True
-    scene.objects.active = armature
+    armature.select_set(True)
+    bpy.context.view_layer.objects.active = armature
     
     if bpy.ops.object.mode_set.poll():
         bpy.ops.object.mode_set(mode='POSE')
@@ -830,8 +835,8 @@ def removeBone(scene, boneName):
     if bpy.ops.object.select_all.poll():
         bpy.ops.object.select_all(action='DESELECT')
     
-    armatureObject.select = True
-    scene.objects.active = armatureObject
+    armatureObject.select_set(True)
+    bpy.context.view_layer.objects.active = armatureObject
     
     if bpy.ops.object.mode_set.poll():
         bpy.ops.object.mode_set(mode='EDIT')
@@ -854,18 +859,18 @@ def selectOrCreateBone(scene, boneName):
     boneExists = bone != None
     if boneExists:
         armature = armatureObject.data
-        armatureObject.select = True
-        scene.objects.active = armatureObject
+        armatureObject.select_set(True)
+        bpy.context.view_layer.objects.active = armatureObject
     else:
         armatureObject = shared.findArmatureObjectForNewBone(scene)
         if armatureObject == None:
             armature = bpy.data.armatures.new(name="Armature")
             armatureObject = bpy.data.objects.new("Armature", armature)
-            scene.objects.link(armatureObject)
+            scene.collection.objects.link(armatureObject)
         else:
             armature = armatureObject.data
-        armatureObject.select = True
-        scene.objects.active = armatureObject
+        armatureObject.select_set(True)
+        bpy.context.view_layer.objects.active = armatureObject
         bpy.ops.object.mode_set(mode='EDIT')
         editBone = armature.edit_bones.new(boneName)
         editBone.head = (0, 0, 0)
@@ -881,8 +886,8 @@ def selectOrCreateBone(scene, boneName):
         boneOfArmature.select = isBoneToSelect
     armature.bones.active = bone
         
-    scene.objects.active = armatureObject
-    armatureObject.select = True
+    bpy.context.view_layer.objects.active = armatureObject
+    armatureObject.select_set(True)
     for currentBone in armature.bones:
         currentBone.select = currentBone.name == boneName
     poseBone = armatureObject.pose.bones[boneName]
@@ -896,12 +901,12 @@ def selectBoneIfItExists(scene, boneName):
         bpy.ops.object.select_all(action='DESELECT')
     bone, armatureObject = shared.findBoneWithArmatureObject(scene, boneName)
     armature = armatureObject.data
-    armatureObject.select = True
-    scene.objects.active = armatureObject
+    armatureObject.select_set(True)
+    bpy.context.view_layer.objects.active = armatureObject
     if bpy.ops.object.mode_set.poll():
         bpy.ops.object.mode_set(mode='POSE')
-    scene.objects.active = armatureObject
-    armatureObject.select = True
+    bpy.context.view_layer.objects.active = armatureObject
+    armatureObject.select_set(True)
     for currentBone in armature.bones:
         currentBone.select = currentBone.name == boneName
     
@@ -1246,570 +1251,570 @@ animationExportAmount = [(shared.exportAmountAllAnimations, "All animations", "A
 class M3AnimIdData(bpy.types.PropertyGroup):
     # animId is actually an unsigned integer but blender can store only signed ones
     # thats why the number range needs to be moved into the negative for storage
-    animIdMinus2147483648 = bpy.props.IntProperty(name="animId", options=set())
-    longAnimId = bpy.props.StringProperty(name="longAnimId", options=set())
+    animIdMinus2147483648: bpy.props.IntProperty(name="animId", options=set())
+    longAnimId: bpy.props.StringProperty(name="longAnimId", options=set())
 
 class M3AnimatedPropertyReference(bpy.types.PropertyGroup):
-    longAnimId = bpy.props.StringProperty(name="longAnimId", options=set())
+    longAnimId: bpy.props.StringProperty(name="longAnimId", options=set())
     
 class AssignedActionOfM3Animation(bpy.types.PropertyGroup):
-    targetName = bpy.props.StringProperty(name="targetName", options=set())
-    actionName = bpy.props.StringProperty(name="actionName", options=set())
+    targetName: bpy.props.StringProperty(name="targetName", options=set())
+    actionName: bpy.props.StringProperty(name="actionName", options=set())
 
 class M3TransformationCollection(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="all", options=set())
-    animatedProperties = bpy.props.CollectionProperty(type=M3AnimatedPropertyReference, options=set())
-    runsConcurrent = bpy.props.BoolProperty(default=True, options=set())
-    priority = bpy.props.IntProperty(subtype="UNSIGNED",options=set())
+    name: bpy.props.StringProperty(name="name", default="all", options=set())
+    animatedProperties: bpy.props.CollectionProperty(type=M3AnimatedPropertyReference, options=set())
+    runsConcurrent: bpy.props.BoolProperty(default=True, options=set())
+    priority: bpy.props.IntProperty(subtype="UNSIGNED",options=set())
 
     
 class M3Animation(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Stand", options=set())
-    startFrame = bpy.props.IntProperty(subtype="UNSIGNED", options=set())
-    useSimulateFrame = bpy.props.BoolProperty(default=False, options=set())
-    simulateFrame = bpy.props.IntProperty(subtype="UNSIGNED", default=0, options=set())
-    exlusiveEndFrame = bpy.props.IntProperty(subtype="UNSIGNED", options=set())
-    assignedActions = bpy.props.CollectionProperty(type=AssignedActionOfM3Animation, options=set())
-    transformationCollections = bpy.props.CollectionProperty(type=M3TransformationCollection, options=set())
-    transformationCollectionIndex = bpy.props.IntProperty(default=0, options=set())
-    movementSpeed = bpy.props.FloatProperty(name="mov. speed", options=set())
-    frequency = bpy.props.IntProperty(subtype="UNSIGNED",options=set())
-    notLooping = bpy.props.BoolProperty(options=set())
-    alwaysGlobal = bpy.props.BoolProperty(options=set())
-    globalInPreviewer = bpy.props.BoolProperty(options=set())
+    name: bpy.props.StringProperty(name="name", default="Stand", options=set())
+    startFrame: bpy.props.IntProperty(subtype="UNSIGNED", options=set())
+    useSimulateFrame: bpy.props.BoolProperty(default=False, options=set())
+    simulateFrame: bpy.props.IntProperty(subtype="UNSIGNED", default=0, options=set())
+    exlusiveEndFrame: bpy.props.IntProperty(subtype="UNSIGNED", options=set())
+    assignedActions: bpy.props.CollectionProperty(type=AssignedActionOfM3Animation, options=set())
+    transformationCollections: bpy.props.CollectionProperty(type=M3TransformationCollection, options=set())
+    transformationCollectionIndex: bpy.props.IntProperty(default=0, options=set())
+    movementSpeed: bpy.props.FloatProperty(name="mov. speed", options=set())
+    frequency: bpy.props.IntProperty(subtype="UNSIGNED",options=set())
+    notLooping: bpy.props.BoolProperty(options=set())
+    alwaysGlobal: bpy.props.BoolProperty(options=set())
+    globalInPreviewer: bpy.props.BoolProperty(options=set())
 
 class M3MaterialLayer(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(default="Material Layer")
-    imagePath = bpy.props.StringProperty(name="image path", default="", options=set())
-    unknownbd3f7b5d = bpy.props.IntProperty(name="unknownbd3f7b5d", default=-1, options=set())
-    color = bpy.props.FloatVectorProperty(name="color", default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=4, subtype="COLOR", options={"ANIMATABLE"})
-    textureWrapX = bpy.props.BoolProperty(options=set(), default=True)
-    textureWrapY = bpy.props.BoolProperty(options=set(), default=True)
-    invertColor = bpy.props.BoolProperty(options=set(), default=False)
-    clampColor = bpy.props.BoolProperty(options=set(), default=False)
-    colorEnabled = bpy.props.BoolProperty(options=set(), default=False)
-    uvSource = bpy.props.EnumProperty(items=uvSourceList, options=set(), default="0")
-    brightMult = bpy.props.FloatProperty(name="bright. mult.",options={"ANIMATABLE"}, default=1.0)
-    uvOffset = bpy.props.FloatVectorProperty(name="uv offset", default=(0.0, 0.0), size=2, subtype="XYZ", options={"ANIMATABLE"})
-    uvAngle = bpy.props.FloatVectorProperty(name="uv offset", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
-    uvTiling = bpy.props.FloatVectorProperty(name="uv tiling", default=(1.0, 1.0), size=2, subtype="XYZ", options={"ANIMATABLE"})
-    triPlanarOffset = bpy.props.FloatVectorProperty(name="tri planer offset", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
-    triPlanarScale = bpy.props.FloatVectorProperty(name="tri planer scale", default=(1.0, 1.0, 1.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
-    flipBookRows = bpy.props.IntProperty(name="flipBookRows", default=0, options=set())
-    flipBookColumns = bpy.props.IntProperty(name="flipBookColumns", default=0, options=set())
-    flipBookFrame = bpy.props.IntProperty(name="flipBookFrame", default=0, options={"ANIMATABLE"})
-    midtoneOffset = bpy.props.FloatProperty(name="midtone offset", options={"ANIMATABLE"}, description="Can be used to make dark areas even darker so that only the bright regions remain")
-    brightness = bpy.props.FloatProperty(name="brightness", options={"ANIMATABLE"}, default=1.0)
-    rttChannel = bpy.props.EnumProperty(items=rttChannelList, options=set(), default="-1")
-    colorChannelSetting = bpy.props.EnumProperty(items=colorChannelSettingList, options=set(), default=shared.colorChannelSettingRGB)
-    fresnelType =  bpy.props.EnumProperty(items=fresnelTypeList, options=set(), default="0")
-    invertedFresnel = bpy.props.BoolProperty(options=set())
-    fresnelExponent = bpy.props.FloatProperty(default=4.0, options=set())
-    fresnelMin = bpy.props.FloatProperty(default=0.0, options=set())
-    fresnelMax = bpy.props.FloatProperty(default=1.0, options=set())
-    fresnelMaskX = bpy.props.FloatProperty(options=set(), min=0.0, max=1.0)
-    fresnelMaskY = bpy.props.FloatProperty(options=set(), min=0.0, max=1.0)
-    fresnelMaskZ = bpy.props.FloatProperty(options=set(), min=0.0, max=1.0)
-    fresnelRotationYaw = bpy.props.FloatProperty(subtype="ANGLE", options=set())
-    fresnelRotationPitch = bpy.props.FloatProperty(subtype="ANGLE", options=set())
-    fresnelLocalTransform = bpy.props.BoolProperty(options=set(), default=False)
-    fresnelDoNotMirror = bpy.props.BoolProperty(options=set(), default=False)
-    videoFrameRate = bpy.props.IntProperty(options=set(), default=24)
-    videoStartFrame = bpy.props.IntProperty(options=set(), default=0)
-    videoEndFrame = bpy.props.IntProperty(options=set(), default=-1)
-    videoMode = bpy.props.EnumProperty(items=videoModeList, options=set(), default="0")
-    videoSyncTiming = bpy.props.BoolProperty(options=set())
-    videoPlay = bpy.props.BoolProperty(name="videoPlay", options={"ANIMATABLE"}, default=True)
-    videoRestart = bpy.props.BoolProperty(name="videoRestart", options={"ANIMATABLE"}, default=True)
+    name: bpy.props.StringProperty(default="Material Layer")
+    imagePath: bpy.props.StringProperty(name="image path", default="", options=set())
+    unknownbd3f7b5d: bpy.props.IntProperty(name="unknownbd3f7b5d", default=-1, options=set())
+    color: bpy.props.FloatVectorProperty(name="color", default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=4, subtype="COLOR", options={"ANIMATABLE"})
+    textureWrapX: bpy.props.BoolProperty(options=set(), default=True)
+    textureWrapY: bpy.props.BoolProperty(options=set(), default=True)
+    invertColor: bpy.props.BoolProperty(options=set(), default=False)
+    clampColor: bpy.props.BoolProperty(options=set(), default=False)
+    colorEnabled: bpy.props.BoolProperty(options=set(), default=False)
+    uvSource: bpy.props.EnumProperty(items=uvSourceList, options=set(), default="0")
+    brightMult: bpy.props.FloatProperty(name="bright. mult.",options={"ANIMATABLE"}, default=1.0)
+    uvOffset: bpy.props.FloatVectorProperty(name="uv offset", default=(0.0, 0.0), size=2, subtype="XYZ", options={"ANIMATABLE"})
+    uvAngle: bpy.props.FloatVectorProperty(name="uv offset", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
+    uvTiling: bpy.props.FloatVectorProperty(name="uv tiling", default=(1.0, 1.0), size=2, subtype="XYZ", options={"ANIMATABLE"})
+    triPlanarOffset: bpy.props.FloatVectorProperty(name="tri planer offset", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
+    triPlanarScale: bpy.props.FloatVectorProperty(name="tri planer scale", default=(1.0, 1.0, 1.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
+    flipBookRows: bpy.props.IntProperty(name="flipBookRows", default=0, options=set())
+    flipBookColumns: bpy.props.IntProperty(name="flipBookColumns", default=0, options=set())
+    flipBookFrame: bpy.props.IntProperty(name="flipBookFrame", default=0, options={"ANIMATABLE"})
+    midtoneOffset: bpy.props.FloatProperty(name="midtone offset", options={"ANIMATABLE"}, description="Can be used to make dark areas even darker so that only the bright regions remain")
+    brightness: bpy.props.FloatProperty(name="brightness", options={"ANIMATABLE"}, default=1.0)
+    rttChannel: bpy.props.EnumProperty(items=rttChannelList, options=set(), default="-1")
+    colorChannelSetting: bpy.props.EnumProperty(items=colorChannelSettingList, options=set(), default=shared.colorChannelSettingRGB)
+    fresnelType: bpy.props.EnumProperty(items=fresnelTypeList, options=set(), default="0")
+    invertedFresnel: bpy.props.BoolProperty(options=set())
+    fresnelExponent: bpy.props.FloatProperty(default=4.0, options=set())
+    fresnelMin: bpy.props.FloatProperty(default=0.0, options=set())
+    fresnelMax: bpy.props.FloatProperty(default=1.0, options=set())
+    fresnelMaskX: bpy.props.FloatProperty(options=set(), min=0.0, max=1.0)
+    fresnelMaskY: bpy.props.FloatProperty(options=set(), min=0.0, max=1.0)
+    fresnelMaskZ: bpy.props.FloatProperty(options=set(), min=0.0, max=1.0)
+    fresnelRotationYaw: bpy.props.FloatProperty(subtype="ANGLE", options=set())
+    fresnelRotationPitch: bpy.props.FloatProperty(subtype="ANGLE", options=set())
+    fresnelLocalTransform: bpy.props.BoolProperty(options=set(), default=False)
+    fresnelDoNotMirror: bpy.props.BoolProperty(options=set(), default=False)
+    videoFrameRate: bpy.props.IntProperty(options=set(), default=24)
+    videoStartFrame: bpy.props.IntProperty(options=set(), default=0)
+    videoEndFrame: bpy.props.IntProperty(options=set(), default=-1)
+    videoMode: bpy.props.EnumProperty(items=videoModeList, options=set(), default="0")
+    videoSyncTiming: bpy.props.BoolProperty(options=set())
+    videoPlay: bpy.props.BoolProperty(name="videoPlay", options={"ANIMATABLE"}, default=True)
+    videoRestart: bpy.props.BoolProperty(name="videoRestart", options={"ANIMATABLE"}, default=True)
 
 class M3Material(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Material", options=set())
-    materialType = bpy.props.IntProperty(options=set())
-    materialIndex = bpy.props.IntProperty(options=set())
+    name: bpy.props.StringProperty(name="name", default="Material", options=set())
+    materialType: bpy.props.IntProperty(options=set())
+    materialIndex: bpy.props.IntProperty(options=set())
     
 class M3StandardMaterial(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
+    name: bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
     # the following field gets used to update the name of the material reference:
-    materialReferenceIndex = bpy.props.IntProperty(options=set(), default=-1)
-    layers = bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
-    blendMode = bpy.props.EnumProperty(items=matBlendModeList, options=set(), default="0")
-    priority = bpy.props.IntProperty(options=set())
-    specularity = bpy.props.FloatProperty(name="specularity", options=set())
-    cutoutThresh = bpy.props.IntProperty(name="cutoutThresh", min=0, max=255, default=0, options=set())
-    specMult = bpy.props.FloatProperty(name="spec. mult.", options=set(), default=1.0)
-    emisMult = bpy.props.FloatProperty(name="emis. mult.", options=set(), default=1.0)
-    layerBlendType = bpy.props.EnumProperty(items=matLayerAndEmisBlendModeList, options=set(), default="2")
-    emisBlendType = bpy.props.EnumProperty(items=matLayerAndEmisBlendModeList, options=set(), default="3")
-    specType = bpy.props.EnumProperty(items=matSpecularTypeList, options=set(), default="0")
-    unfogged = bpy.props.BoolProperty(options=set(), default=True)
-    twoSided = bpy.props.BoolProperty(options=set(), default=False)
-    unshaded = bpy.props.BoolProperty(options=set(), default=False)
-    noShadowsCast = bpy.props.BoolProperty(options=set(), default=False)
-    noHitTest = bpy.props.BoolProperty(options=set(), default=False)
-    noShadowsReceived = bpy.props.BoolProperty(options=set(), default=False)
-    depthPrepass = bpy.props.BoolProperty(options=set(), default=False)
-    useTerrainHDR = bpy.props.BoolProperty(options=set(), default=False)
-    splatUVfix = bpy.props.BoolProperty(options=set(), default=False)
-    softBlending = bpy.props.BoolProperty(options=set(), default=False)
-    forParticles = bpy.props.BoolProperty(options=set(), default=False)
-    transparency = bpy.props.BoolProperty(options=set(), default=False)
-    disableSoft = bpy.props.BoolProperty(options=set(), default=False)
-    darkNormalMapping = bpy.props.BoolProperty(options=set(), default=False)
-    decalRequiredOnLowEnd = bpy.props.BoolProperty(options=set(), default=False)
-    acceptSplats = bpy.props.BoolProperty(options=set(), default=False)
-    acceptSplatsOnly = bpy.props.BoolProperty(options=set(), default=False)
-    emissiveRequiredOnLowEnd = bpy.props.BoolProperty(options=set(), default=False)
-    backgroundObject = bpy.props.BoolProperty(options=set(), default=False)
-    zpFillRequiredOnLowEnd = bpy.props.BoolProperty(options=set(), default=False)
-    excludeFromHighlighting = bpy.props.BoolProperty(options=set(), default=False)
-    clampOutput = bpy.props.BoolProperty(options=set(), default=False)
-    geometryVisible = bpy.props.BoolProperty(options=set(), default=True)
+    materialReferenceIndex: bpy.props.IntProperty(options=set(), default=-1)
+    layers: bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
+    blendMode: bpy.props.EnumProperty(items=matBlendModeList, options=set(), default="0")
+    priority: bpy.props.IntProperty(options=set())
+    specularity: bpy.props.FloatProperty(name="specularity", options=set())
+    cutoutThresh: bpy.props.IntProperty(name="cutoutThresh", min=0, max=255, default=0, options=set())
+    specMult: bpy.props.FloatProperty(name="spec. mult.", options=set(), default=1.0)
+    emisMult: bpy.props.FloatProperty(name="emis. mult.", options=set(), default=1.0)
+    layerBlendType: bpy.props.EnumProperty(items=matLayerAndEmisBlendModeList, options=set(), default="2")
+    emisBlendType: bpy.props.EnumProperty(items=matLayerAndEmisBlendModeList, options=set(), default="3")
+    specType: bpy.props.EnumProperty(items=matSpecularTypeList, options=set(), default="0")
+    unfogged: bpy.props.BoolProperty(options=set(), default=True)
+    twoSided: bpy.props.BoolProperty(options=set(), default=False)
+    unshaded: bpy.props.BoolProperty(options=set(), default=False)
+    noShadowsCast: bpy.props.BoolProperty(options=set(), default=False)
+    noHitTest: bpy.props.BoolProperty(options=set(), default=False)
+    noShadowsReceived: bpy.props.BoolProperty(options=set(), default=False)
+    depthPrepass: bpy.props.BoolProperty(options=set(), default=False)
+    useTerrainHDR: bpy.props.BoolProperty(options=set(), default=False)
+    splatUVfix: bpy.props.BoolProperty(options=set(), default=False)
+    softBlending: bpy.props.BoolProperty(options=set(), default=False)
+    forParticles: bpy.props.BoolProperty(options=set(), default=False)
+    transparency: bpy.props.BoolProperty(options=set(), default=False)
+    disableSoft: bpy.props.BoolProperty(options=set(), default=False)
+    darkNormalMapping: bpy.props.BoolProperty(options=set(), default=False)
+    decalRequiredOnLowEnd: bpy.props.BoolProperty(options=set(), default=False)
+    acceptSplats: bpy.props.BoolProperty(options=set(), default=False)
+    acceptSplatsOnly: bpy.props.BoolProperty(options=set(), default=False)
+    emissiveRequiredOnLowEnd: bpy.props.BoolProperty(options=set(), default=False)
+    backgroundObject: bpy.props.BoolProperty(options=set(), default=False)
+    zpFillRequiredOnLowEnd: bpy.props.BoolProperty(options=set(), default=False)
+    excludeFromHighlighting: bpy.props.BoolProperty(options=set(), default=False)
+    clampOutput: bpy.props.BoolProperty(options=set(), default=False)
+    geometryVisible: bpy.props.BoolProperty(options=set(), default=True)
     
-    depthBlendFalloff = bpy.props.FloatProperty(name="depth blend falloff", options=set(), update=handleDepthBlendFalloffChanged, default=0.0)
-    useDepthBlendFalloff = bpy.props.BoolProperty(options=set(), update=handleUseDepthBlendFalloffChanged, description="Should be true for particle system materials", default=False)
-    useVertexColor = bpy.props.BoolProperty(options=set(), description="The vertex color layer named color will be used to tint the model", default=False)
-    useVertexAlpha = bpy.props.BoolProperty(options=set(), description="The vertex color layer named alpha, will be used to determine the alpha of the model", default=False)
-    unknownFlag0x200 = bpy.props.BoolProperty(options=set())
+    depthBlendFalloff: bpy.props.FloatProperty(name="depth blend falloff", options=set(), update=handleDepthBlendFalloffChanged, default=0.0)
+    useDepthBlendFalloff: bpy.props.BoolProperty(options=set(), update=handleUseDepthBlendFalloffChanged, description="Should be true for particle system materials", default=False)
+    useVertexColor: bpy.props.BoolProperty(options=set(), description="The vertex color layer named color will be used to tint the model", default=False)
+    useVertexAlpha: bpy.props.BoolProperty(options=set(), description="The vertex color layer named alpha, will be used to determine the alpha of the model", default=False)
+    unknownFlag0x200: bpy.props.BoolProperty(options=set())
 
 class M3DisplacementMaterial(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
+    name: bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
     # the following field gets used to update the name of the material reference:
-    materialReferenceIndex = bpy.props.IntProperty(options=set(), default=-1)
-    strengthFactor = bpy.props.FloatProperty(name="strength factor",options={"ANIMATABLE"}, default=1.0, description="Factor that gets multiplicated with the strength values")
-    layers = bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
-    priority = bpy.props.IntProperty(options=set())
+    materialReferenceIndex: bpy.props.IntProperty(options=set(), default=-1)
+    strengthFactor: bpy.props.FloatProperty(name="strength factor",options={"ANIMATABLE"}, default=1.0, description="Factor that gets multiplicated with the strength values")
+    layers: bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
+    priority: bpy.props.IntProperty(options=set())
     
 class M3CompositeMaterialSection(bpy.types.PropertyGroup):
     # The material name is getting called "name" so that blender names it properly in the list view
-    name = bpy.props.StringProperty(options=set()) 
-    alphaFactor = bpy.props.FloatProperty(name="alphaFactor", options={"ANIMATABLE"}, min=0.0, max=1.0, default=1.0, description="Defines the factor with which the alpha channel gets multiplicated")
+    name: bpy.props.StringProperty(options=set())
+    alphaFactor: bpy.props.FloatProperty(name="alphaFactor", options={"ANIMATABLE"}, min=0.0, max=1.0, default=1.0, description="Defines the factor with which the alpha channel gets multiplicated")
 
 class M3CompositeMaterial(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
+    name: bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
     # the following field gets used to update the name of the material reference:
-    materialReferenceIndex = bpy.props.IntProperty(options=set(), default=-1)
-    layers = bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
-    sections = bpy.props.CollectionProperty(type=M3CompositeMaterialSection, options=set())
-    sectionIndex = bpy.props.IntProperty(options=set(), default=0)
+    materialReferenceIndex: bpy.props.IntProperty(options=set(), default=-1)
+    layers: bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
+    sections: bpy.props.CollectionProperty(type=M3CompositeMaterialSection, options=set())
+    sectionIndex: bpy.props.IntProperty(options=set(), default=0)
     
 class M3TerrainMaterial(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
+    name: bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
     # the following field gets used to update the name of the material reference:
-    materialReferenceIndex = bpy.props.IntProperty(options=set(), default=-1)
-    layers = bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
+    materialReferenceIndex: bpy.props.IntProperty(options=set(), default=-1)
+    layers: bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
 
 class M3VolumeMaterial(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
+    name: bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
     # the following field gets used to update the name of the material reference:
-    materialReferenceIndex = bpy.props.IntProperty(options=set(), default=-1)
-    volumeDensity = bpy.props.FloatProperty(name="volume density",options={"ANIMATABLE"}, default=0.3, description="Factor that gets multiplicated with the strength values")
-    layers = bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
+    materialReferenceIndex: bpy.props.IntProperty(options=set(), default=-1)
+    volumeDensity: bpy.props.FloatProperty(name="volume density",options={"ANIMATABLE"}, default=0.3, description="Factor that gets multiplicated with the strength values")
+    layers: bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
 
 class M3VolumeNoiseMaterial(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
+    name: bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
     # the following field gets used to update the name of the material reference:
-    materialReferenceIndex = bpy.props.IntProperty(options=set(), default=-1)
-    volumeDensity = bpy.props.FloatProperty(name="volume density",options={"ANIMATABLE"}, default=0.3, description="Factor that gets multiplicated with the strength values")
-    nearPlane = bpy.props.FloatProperty(name="near plane",options={"ANIMATABLE"}, default=0.0)
-    falloff = bpy.props.FloatProperty(name="falloff",options={"ANIMATABLE"}, default=0.9)
-    layers = bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
-    scrollRate = bpy.props.FloatVectorProperty(name="scroll rate", default=(0.0, 0.0, 0.8), size=3, subtype="XYZ", options={"ANIMATABLE"})
-    translation = bpy.props.FloatVectorProperty(name="translation", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
-    scale = bpy.props.FloatVectorProperty(name="scale", default=(2.0, 2.0, 1.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
-    rotation = bpy.props.FloatVectorProperty(name="rotation", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
-    alphaTreshhold = bpy.props.IntProperty(options=set(), default=0)
-    drawAfterTransparency = bpy.props.BoolProperty(options=set(), default=False)
+    materialReferenceIndex: bpy.props.IntProperty(options=set(), default=-1)
+    volumeDensity: bpy.props.FloatProperty(name="volume density",options={"ANIMATABLE"}, default=0.3, description="Factor that gets multiplicated with the strength values")
+    nearPlane: bpy.props.FloatProperty(name="near plane",options={"ANIMATABLE"}, default=0.0)
+    falloff: bpy.props.FloatProperty(name="falloff",options={"ANIMATABLE"}, default=0.9)
+    layers: bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
+    scrollRate: bpy.props.FloatVectorProperty(name="scroll rate", default=(0.0, 0.0, 0.8), size=3, subtype="XYZ", options={"ANIMATABLE"})
+    translation: bpy.props.FloatVectorProperty(name="translation", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
+    scale: bpy.props.FloatVectorProperty(name="scale", default=(2.0, 2.0, 1.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
+    rotation: bpy.props.FloatVectorProperty(name="rotation", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
+    alphaTreshhold: bpy.props.IntProperty(options=set(), default=0)
+    drawAfterTransparency: bpy.props.BoolProperty(options=set(), default=False)
 
 class M3CreepMaterial(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
+    name: bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
     # the following field gets used to update the name of the material reference:
-    materialReferenceIndex = bpy.props.IntProperty(options=set(), default=-1)
-    layers = bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
+    materialReferenceIndex: bpy.props.IntProperty(options=set(), default=-1)
+    layers: bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
 
 class M3STBMaterial(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
+    name: bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
     # the following field gets used to update the name of the material reference:
-    materialReferenceIndex = bpy.props.IntProperty(options=set(), default=-1)
-    layers = bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
+    materialReferenceIndex: bpy.props.IntProperty(options=set(), default=-1)
+    layers: bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
 
 class M3LensFlareMaterial(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
+    name: bpy.props.StringProperty(name="name", default="Material", update=handleMaterialNameChange, options=set())
     # the following field gets used to update the name of the material reference:
-    materialReferenceIndex = bpy.props.IntProperty(options=set(), default=-1)
-    layers = bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
+    materialReferenceIndex: bpy.props.IntProperty(options=set(), default=-1)
+    layers: bpy.props.CollectionProperty(type=M3MaterialLayer, options=set())
 
 class M3Camera(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="Camera", update=handleCameraNameChange, options=set())
-    oldName = bpy.props.StringProperty(name="oldName", options=set())
-    fieldOfView = bpy.props.FloatProperty(name="fieldOfView", options={"ANIMATABLE"}, default=0.5)
-    farClip = bpy.props.FloatProperty(name="farClip", options={"ANIMATABLE"}, default=10.0)
-    nearClip = bpy.props.FloatProperty(name="nearClip", options={"ANIMATABLE"}, default=10.0)
-    clip2 = bpy.props.FloatProperty(name="clip2", options={"ANIMATABLE"}, default=10.0)
-    focalDepth = bpy.props.FloatProperty(name="focalDepth", options={"ANIMATABLE"}, default=2)
-    falloffStart = bpy.props.FloatProperty(name="falloffStart", options={"ANIMATABLE"}, default=1.0)
-    falloffEnd = bpy.props.FloatProperty(name="falloffEnd", options={"ANIMATABLE"}, default=2.0)
-    depthOfField = bpy.props.FloatProperty(name="depthOfField", options={"ANIMATABLE"}, default=0.5)
+    name: bpy.props.StringProperty(name="name", default="Camera", update=handleCameraNameChange, options=set())
+    oldName: bpy.props.StringProperty(name="oldName", options=set())
+    fieldOfView: bpy.props.FloatProperty(name="fieldOfView", options={"ANIMATABLE"}, default=0.5)
+    farClip: bpy.props.FloatProperty(name="farClip", options={"ANIMATABLE"}, default=10.0)
+    nearClip: bpy.props.FloatProperty(name="nearClip", options={"ANIMATABLE"}, default=10.0)
+    clip2: bpy.props.FloatProperty(name="clip2", options={"ANIMATABLE"}, default=10.0)
+    focalDepth: bpy.props.FloatProperty(name="focalDepth", options={"ANIMATABLE"}, default=2)
+    falloffStart: bpy.props.FloatProperty(name="falloffStart", options={"ANIMATABLE"}, default=1.0)
+    falloffEnd: bpy.props.FloatProperty(name="falloffEnd", options={"ANIMATABLE"}, default=2.0)
+    depthOfField: bpy.props.FloatProperty(name="depthOfField", options={"ANIMATABLE"}, default=0.5)
 
 class M3Boundings(bpy.types.PropertyGroup):
-    radius = bpy.props.FloatProperty(name="radius", options=set(), default=2.0)
-    center = bpy.props.FloatVectorProperty(name="center", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options=set())
-    size = bpy.props.FloatVectorProperty(name="size", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options=set())
+    radius: bpy.props.FloatProperty(name="radius", options=set(), default=2.0)
+    center: bpy.props.FloatVectorProperty(name="center", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options=set())
+    size: bpy.props.FloatVectorProperty(name="size", default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", options=set())
 
 
 class M3ParticleSpawnPoint(bpy.types.PropertyGroup):
-    location = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), name="location", size=3, subtype="XYZ", options={"ANIMATABLE"}, description="The first two values are the initial and final size of particles")
+    location: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), name="location", size=3, subtype="XYZ", options={"ANIMATABLE"}, description="The first two values are the initial and final size of particles")
 
 
 class M3ParticleSystemCopy(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(options=set(), update=handleParticleSystemCopyRename)
-    boneName = bpy.props.StringProperty(options=set())
-    emissionRate = bpy.props.FloatProperty(default=10.0, name="emiss. rate", options={"ANIMATABLE"})
-    partEmit = bpy.props.IntProperty(default=0, subtype="UNSIGNED", options={"ANIMATABLE"})
+    name: bpy.props.StringProperty(options=set(), update=handleParticleSystemCopyRename)
+    boneName: bpy.props.StringProperty(options=set())
+    emissionRate: bpy.props.FloatProperty(default=10.0, name="emiss. rate", options={"ANIMATABLE"})
+    partEmit: bpy.props.IntProperty(default=0, subtype="UNSIGNED", options={"ANIMATABLE"})
 
 
 class M3ParticleSystem(bpy.types.PropertyGroup):
 
     # name attribute seems to be needed for template_list but is not actually in the m3 file
     # The name gets calculated like this: name = boneSuffix (type)
-    name = bpy.props.StringProperty(options=set(), update=handleParticleSystemTypeOrNameChange)
-    boneName = bpy.props.StringProperty(options=set())
-    updateBlenderBoneShapes = bpy.props.BoolProperty(default=True, options=set())
-    materialName = bpy.props.StringProperty(options=set())
-    maxParticles = bpy.props.IntProperty(default=20, subtype="UNSIGNED",options=set())
-    emissionSpeed1 = bpy.props.FloatProperty(name="emis. speed 1",options={"ANIMATABLE"}, default=0.0, description="The initial speed of the particles at emission")
-    emissionSpeed2 = bpy.props.FloatProperty(default=1.0, name="emiss. speed 2",options={"ANIMATABLE"}, description="If emission speed randomization is enabled this value specfies the other end of the range of random speeds")
-    randomizeWithEmissionSpeed2 = bpy.props.BoolProperty(options=set(),default=False, description="Specifies if the second emission speed value should be used to generate random emission speeds")
-    emissionAngleX = bpy.props.FloatProperty(default=0.0, name="emis. angle X", subtype="ANGLE", options={"ANIMATABLE"}, description="Specifies the X rotation of the emission vector")
-    emissionAngleY = bpy.props.FloatProperty(default=0.0, name="emis. angle Y", subtype="ANGLE", options={"ANIMATABLE"}, description="Specifies the Y rotation of the emission vector")
-    emissionSpreadX = bpy.props.FloatProperty(default=0.0, name="emissionSpreadX", options={"ANIMATABLE"}, description="Specifies in radian by how much the emission vector can be randomly rotated around the X axis")
-    emissionSpreadY = bpy.props.FloatProperty(default=0.0, name="emissionSpreadY", options={"ANIMATABLE"}, description="Specifies in radian by how much the emission vector can be randomly rotated around the Y axis")
-    lifespan1 = bpy.props.FloatProperty(default=0.5, name="lifespan1", options={"ANIMATABLE"},  description="Specfies how long it takes before the particles start to decay")
-    lifespan2 = bpy.props.FloatProperty(default=5.0, name="lifespan2", options={"ANIMATABLE"}, description="If random lifespans are enabled this specifies the other end of the range for random lifespan values")
-    randomizeWithLifespan2 = bpy.props.BoolProperty(default=True, name="randomizeWithLifespan2", options=set(), description="Specifies if particles should have random lifespans")
-    zAcceleration = bpy.props.FloatProperty(default=0.0, name="z acceleration",options=set(), description="Negative gravity which does not get influenced by the emission vector")
-    sizeAnimationMiddle = bpy.props.FloatProperty(default=0.5, min=0.0, max=1.0, subtype="FACTOR", name="sizeAnimationMiddle", options=set(), description="Percentage of lifetime when the scale animation reaches reaches its middle value")
-    colorAnimationMiddle = bpy.props.FloatProperty(default=0.5, min=0.0, max=1.0, subtype="FACTOR", name="colorAnimationMiddle", options=set(), description="Percentage of lifetime when the color animation (without alpha) reaches reaches its middle value")
-    alphaAnimationMiddle = bpy.props.FloatProperty(default=0.5, min=0.0, max=1.0, subtype="FACTOR", name="alphaAnimationMiddle", options=set(), description="Percentage of lifetime when the alpha animation reaches reaches its middle value")
-    rotationAnimationMiddle = bpy.props.FloatProperty(default=0.5, min=0.0, max=1.0, subtype="FACTOR", name="rotationAnimationMiddle", options=set(), description="Percentage of lifetime when the scale animation reaches reaches its middle value")
-    sizeHoldTime = bpy.props.FloatProperty(default=0.3, min=0.0, max=1.0, name="sizeHoldTime", options=set(), description="Factor of particle liftime to hold the middle size value")
-    colorHoldTime = bpy.props.FloatProperty(default=0.3, min=0.0, max=1.0, name="colorHoldTime", options=set(), description="Factor of particle lifetime to hold the middle color and alpha value")
-    alphaHoldTime = bpy.props.FloatProperty(default=0.3, min=0.0, max=1.0, name="alphaHoldTime", options=set(), description="Factor of particle lifetime to hold the middle rotation value")    
-    rotationHoldTime = bpy.props.FloatProperty(default=0.3, min=0.0, max=1.0, name="rotationHoldTime", options=set(), description="Factor of particle lifetime to hold the middle rotation value")    
-    sizeSmoothingType = bpy.props.EnumProperty(default="0", items=particleAnimationSmoothTypeList, options=set(), description="Determines the shape of the size curve based on the intial, middle , final and hold time value")    
-    colorSmoothingType = bpy.props.EnumProperty(default="0", items=particleAnimationSmoothTypeList, options=set(), description="Determines the shape of the color curve based on the intial, middle , final and hold time value")    
-    rotationSmoothingType = bpy.props.EnumProperty(default="0", items=particleAnimationSmoothTypeList, options=set(), description="Determines the shape of the rotation curve based on the intial, middle , final and hold time value")    
-    particleSizes1 = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), name="particle sizes 1", size=3, subtype="XYZ", options={"ANIMATABLE"}, description="The first two values are the initial and final size of particles")
-    rotationValues1 = bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), name="rotation values 1", size=3, subtype="XYZ", options={"ANIMATABLE"}, description="The first value is the inital rotation and the second value is the rotation speed")
-    initialColor1 = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, name="initial color 1", size=4, subtype="COLOR", options={"ANIMATABLE"}, description="Color of the particle when it gets emitted")
-    middleColor1 = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, name="unknown color 1", size=4, subtype="COLOR", options={"ANIMATABLE"})
-    finalColor1 = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 0.5), min = 0.0, max = 1.0, name="final color 1", size=4, subtype="COLOR", options={"ANIMATABLE"}, description="The color the particle will have when it vanishes")
-    slowdown = bpy.props.FloatProperty(default=1.0, min=0.0, name="slowdown" ,options=set(), description="The amounth of speed reduction in the particles lifetime")
-    mass = bpy.props.FloatProperty(default=0.001, name="mass",options=set())
-    mass2 = bpy.props.FloatProperty(default=1.0, name="mass2",options=set())
-    randomizeWithMass2 = bpy.props.BoolProperty(options=set(),default=True, description="Specifies if the second mass value should be used to generate random mass values")
-    unknownFloat2c = bpy.props.FloatProperty(default=2.0, name="unknownFloat2c",options=set())
-    trailingEnabled = bpy.props.BoolProperty(default=True, options=set(), description="If trailing is enabled then particles don't follow the particle emitter")
-    emissionRate = bpy.props.FloatProperty(default=10.0, name="emiss. rate", options={"ANIMATABLE"})
-    emissionAreaType = bpy.props.EnumProperty(default="2", items=emissionAreaTypeList, update=handleParticleSystemTypeOrNameChange, options=set())
-    cutoutEmissionArea = bpy.props.BoolProperty(options=set())
-    emissionAreaSize = bpy.props.FloatVectorProperty(default=(0.1, 0.1, 0.1), name="emis. area size", update=handleParticleSystemAreaSizeChange, size=3, subtype="XYZ", options={"ANIMATABLE"})
-    emissionAreaCutoutSize = bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), name="tail unk.", size=3, subtype="XYZ", options={"ANIMATABLE"})
-    emissionAreaRadius = bpy.props.FloatProperty(default=2.0, name="emis. area radius", update=handleParticleSystemAreaSizeChange, options={"ANIMATABLE"})
-    emissionAreaCutoutRadius = bpy.props.FloatProperty(default=0.0, name="spread unk.", options={"ANIMATABLE"})
-    spawnPoints = bpy.props.CollectionProperty(type=M3ParticleSpawnPoint)
-    emissionType = bpy.props.EnumProperty(default="0", items=particleEmissionTypeList, options=set())
-    randomizeWithParticleSizes2 = bpy.props.BoolProperty(default=False, options=set(), description="Specifies if particles have random sizes")
-    particleSizes2 = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), name="particle sizes 2", size=3, subtype="XYZ", options={"ANIMATABLE"}, description="The first two values are used to determine a random initial and final size for a particle")
-    randomizeWithRotationValues2 = bpy.props.BoolProperty(default=False, options=set())
-    rotationValues2 = bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), name="rotation values 2", size=3, subtype="XYZ", options={"ANIMATABLE"})
-    randomizeWithColor2 = bpy.props.BoolProperty(default=False, options=set())
-    initialColor2 = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, name="initial color 2", size=4, subtype="COLOR", options={"ANIMATABLE"})
-    middleColor2 = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, name="unknown color 2", size=4, subtype="COLOR", options={"ANIMATABLE"})
-    finalColor2 = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 0.0), min = 0.0, max = 1.0, name="final color 2", size=4, subtype="COLOR", options={"ANIMATABLE"})
-    partEmit = bpy.props.IntProperty(default=0, subtype="UNSIGNED", options={"ANIMATABLE"})
-    phase1StartImageIndex = bpy.props.IntProperty(default=0, min=0, max=255, subtype="UNSIGNED", options=set(), description="Specifies the cell index shown at start of phase 1 when the image got divided into rows and collumns")
-    phase1EndImageIndex = bpy.props.IntProperty(default=0, min=0, max=255, subtype="UNSIGNED", options=set(), description="Specifies the cell index shown at end of phase 1 when the image got divided into rows and collumns")
-    phase2StartImageIndex = bpy.props.IntProperty(default=0, min=0, max=255, subtype="UNSIGNED", options=set(), description="Specifies the cell index shown at start of phase 2 when the image got divided into rows and collumns")
-    phase2EndImageIndex = bpy.props.IntProperty(default=0, min=0, max=255, subtype="UNSIGNED", options=set(), description="Specifies the cell index shown at end of phase 2 when the image got divided into rows and collumns")
-    relativePhase1Length = bpy.props.FloatProperty(default=1.0, min=0.0, max=1.0, subtype="FACTOR", name="relative phase 1 length", options=set(), description="A value of 0.4 means that 40% of the lifetime of the particle the phase 1 image animation will play")
-    numberOfColumns = bpy.props.IntProperty(default=0, min=0, subtype="UNSIGNED", name="columns", options=set(), description="Specifies in how many columns the image gets divided")
-    numberOfRows = bpy.props.IntProperty(default=0, min=0, subtype="UNSIGNED", name="rows", options=set(), description="Specifies in how many rows the image gets divided")
-    columnWidth = bpy.props.FloatProperty(default=float("inf"), min=0.0, max=1.0, name="columnWidth", options=set(), description="Specifies the width of one column, relative to an image with width 1")
-    rowHeight = bpy.props.FloatProperty(default=float("inf"), min=0.0, max=1.0, name="rowHeight", options=set(), description="Specifies the height of one row, relative to an image with height 1")
-    unknownFloat4 = bpy.props.FloatProperty(default=0.0, name="unknownFloat4",options=set())
-    unknownFloat5 = bpy.props.FloatProperty(default=1.0, name="unknownFloat5",options=set())
-    unknownFloat6 = bpy.props.FloatProperty(default=1.0, name="unknownFloat6",options=set())
-    unknownFloat7 = bpy.props.FloatProperty(default=1.0, name="unknownFloat7",options=set())
-    particleType = bpy.props.EnumProperty(default="0", items=particleTypeList, options=set())
-    lengthWidthRatio = bpy.props.FloatProperty(default=1.0, name="lengthWidthRatio",options=set())
-    localForceChannels = bpy.props.BoolVectorProperty(default=tuple(16*[False]), size=16, subtype="LAYER", options=set(), description="If a model internal force shares a local force channel with a particle system then it affects it")
-    worldForceChannels = bpy.props.BoolVectorProperty(default=tuple(16*[False]), size=16, subtype="LAYER", options=set(), description="If a force shares a force channel with a particle system then it affects it")
-    copies = bpy.props.CollectionProperty(type=M3ParticleSystemCopy)
-    copyIndex = bpy.props.IntProperty(options=set(), update=handlePartileSystemCopyIndexChanged)
-    trailingParticlesName = bpy.props.StringProperty(options=set())
-    trailingParticlesChance = bpy.props.FloatProperty(default=0.0, min=0.0, max=1.0, subtype="FACTOR", name="trailingParticlesChance",options=set())
-    trailingParticlesRate = bpy.props.FloatProperty(default=10.0, name="trail. emiss. rate", options={"ANIMATABLE"})
-    noiseAmplitude = bpy.props.FloatProperty(default=0.0, name="noiseAmplitude",options=set())
-    noiseFrequency = bpy.props.FloatProperty(default=0.0, name="noiseFrequency",options=set())
-    noiseCohesion = bpy.props.FloatProperty(default=0.0, name="noiseCohesion",options=set(), description="Prevents the particles from spreading to far from noise")
-    noiseEdge = bpy.props.FloatProperty(default=0.0, min=0.0, max=0.5, subtype="FACTOR", name="noiseEdge", options=set(), description="The closer the value is to 0.5 the less noise will be at the start of particles life time")
-    sort = bpy.props.BoolProperty(options=set())
-    collideTerrain = bpy.props.BoolProperty(options=set())
-    collideObjects = bpy.props.BoolProperty(options=set())
-    spawnOnBounce = bpy.props.BoolProperty(options=set())
-    inheritEmissionParams = bpy.props.BoolProperty(options=set())
-    inheritParentVel = bpy.props.BoolProperty(options=set())
-    sortByZHeight = bpy.props.BoolProperty(options=set())
-    reverseIteration = bpy.props.BoolProperty(options=set())
-    litParts = bpy.props.BoolProperty(options=set())
-    randFlipBookStart = bpy.props.BoolProperty(options=set())
-    multiplyByGravity = bpy.props.BoolProperty(options=set())
-    clampTailParts = bpy.props.BoolProperty(options=set())
-    spawnTrailingParts = bpy.props.BoolProperty(options=set())
-    fixLengthTailParts = bpy.props.BoolProperty(options=set())
-    useVertexAlpha = bpy.props.BoolProperty(options=set())
-    modelParts = bpy.props.BoolProperty(options=set())
-    swapYZonModelParts = bpy.props.BoolProperty(options=set())
-    scaleTimeByParent = bpy.props.BoolProperty(options=set())
-    useLocalTime = bpy.props.BoolProperty(options=set())
-    simulateOnInit = bpy.props.BoolProperty(options=set())
-    copy = bpy.props.BoolProperty(options=set())
+    name: bpy.props.StringProperty(options=set(), update=handleParticleSystemTypeOrNameChange)
+    boneName: bpy.props.StringProperty(options=set())
+    updateBlenderBoneShapes: bpy.props.BoolProperty(default=True, options=set())
+    materialName: bpy.props.StringProperty(options=set())
+    maxParticles: bpy.props.IntProperty(default=20, subtype="UNSIGNED",options=set())
+    emissionSpeed1: bpy.props.FloatProperty(name="emis. speed 1",options={"ANIMATABLE"}, default=0.0, description="The initial speed of the particles at emission")
+    emissionSpeed2: bpy.props.FloatProperty(default=1.0, name="emiss. speed 2",options={"ANIMATABLE"}, description="If emission speed randomization is enabled this value specfies the other end of the range of random speeds")
+    randomizeWithEmissionSpeed2: bpy.props.BoolProperty(options=set(),default=False, description="Specifies if the second emission speed value should be used to generate random emission speeds")
+    emissionAngleX: bpy.props.FloatProperty(default=0.0, name="emis. angle X", subtype="ANGLE", options={"ANIMATABLE"}, description="Specifies the X rotation of the emission vector")
+    emissionAngleY: bpy.props.FloatProperty(default=0.0, name="emis. angle Y", subtype="ANGLE", options={"ANIMATABLE"}, description="Specifies the Y rotation of the emission vector")
+    emissionSpreadX: bpy.props.FloatProperty(default=0.0, name="emissionSpreadX", options={"ANIMATABLE"}, description="Specifies in radian by how much the emission vector can be randomly rotated around the X axis")
+    emissionSpreadY: bpy.props.FloatProperty(default=0.0, name="emissionSpreadY", options={"ANIMATABLE"}, description="Specifies in radian by how much the emission vector can be randomly rotated around the Y axis")
+    lifespan1: bpy.props.FloatProperty(default=0.5, name="lifespan1", options={"ANIMATABLE"},  description="Specfies how long it takes before the particles start to decay")
+    lifespan2: bpy.props.FloatProperty(default=5.0, name="lifespan2", options={"ANIMATABLE"}, description="If random lifespans are enabled this specifies the other end of the range for random lifespan values")
+    randomizeWithLifespan2: bpy.props.BoolProperty(default=True, name="randomizeWithLifespan2", options=set(), description="Specifies if particles should have random lifespans")
+    zAcceleration: bpy.props.FloatProperty(default=0.0, name="z acceleration",options=set(), description="Negative gravity which does not get influenced by the emission vector")
+    sizeAnimationMiddle: bpy.props.FloatProperty(default=0.5, min=0.0, max=1.0, subtype="FACTOR", name="sizeAnimationMiddle", options=set(), description="Percentage of lifetime when the scale animation reaches reaches its middle value")
+    colorAnimationMiddle: bpy.props.FloatProperty(default=0.5, min=0.0, max=1.0, subtype="FACTOR", name="colorAnimationMiddle", options=set(), description="Percentage of lifetime when the color animation (without alpha) reaches reaches its middle value")
+    alphaAnimationMiddle: bpy.props.FloatProperty(default=0.5, min=0.0, max=1.0, subtype="FACTOR", name="alphaAnimationMiddle", options=set(), description="Percentage of lifetime when the alpha animation reaches reaches its middle value")
+    rotationAnimationMiddle: bpy.props.FloatProperty(default=0.5, min=0.0, max=1.0, subtype="FACTOR", name="rotationAnimationMiddle", options=set(), description="Percentage of lifetime when the scale animation reaches reaches its middle value")
+    sizeHoldTime: bpy.props.FloatProperty(default=0.3, min=0.0, max=1.0, name="sizeHoldTime", options=set(), description="Factor of particle liftime to hold the middle size value")
+    colorHoldTime: bpy.props.FloatProperty(default=0.3, min=0.0, max=1.0, name="colorHoldTime", options=set(), description="Factor of particle lifetime to hold the middle color and alpha value")
+    alphaHoldTime: bpy.props.FloatProperty(default=0.3, min=0.0, max=1.0, name="alphaHoldTime", options=set(), description="Factor of particle lifetime to hold the middle rotation value")
+    rotationHoldTime: bpy.props.FloatProperty(default=0.3, min=0.0, max=1.0, name="rotationHoldTime", options=set(), description="Factor of particle lifetime to hold the middle rotation value")
+    sizeSmoothingType: bpy.props.EnumProperty(default="0", items=particleAnimationSmoothTypeList, options=set(), description="Determines the shape of the size curve based on the intial, middle , final and hold time value")
+    colorSmoothingType: bpy.props.EnumProperty(default="0", items=particleAnimationSmoothTypeList, options=set(), description="Determines the shape of the color curve based on the intial, middle , final and hold time value")
+    rotationSmoothingType: bpy.props.EnumProperty(default="0", items=particleAnimationSmoothTypeList, options=set(), description="Determines the shape of the rotation curve based on the intial, middle , final and hold time value")
+    particleSizes1: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), name="particle sizes 1", size=3, subtype="XYZ", options={"ANIMATABLE"}, description="The first two values are the initial and final size of particles")
+    rotationValues1: bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), name="rotation values 1", size=3, subtype="XYZ", options={"ANIMATABLE"}, description="The first value is the inital rotation and the second value is the rotation speed")
+    initialColor1: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, name="initial color 1", size=4, subtype="COLOR", options={"ANIMATABLE"}, description="Color of the particle when it gets emitted")
+    middleColor1: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, name="unknown color 1", size=4, subtype="COLOR", options={"ANIMATABLE"})
+    finalColor1: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 0.5), min = 0.0, max = 1.0, name="final color 1", size=4, subtype="COLOR", options={"ANIMATABLE"}, description="The color the particle will have when it vanishes")
+    slowdown: bpy.props.FloatProperty(default=1.0, min=0.0, name="slowdown" ,options=set(), description="The amounth of speed reduction in the particles lifetime")
+    mass: bpy.props.FloatProperty(default=0.001, name="mass",options=set())
+    mass2: bpy.props.FloatProperty(default=1.0, name="mass2",options=set())
+    randomizeWithMass2: bpy.props.BoolProperty(options=set(),default=True, description="Specifies if the second mass value should be used to generate random mass values")
+    unknownFloat2c: bpy.props.FloatProperty(default=2.0, name="unknownFloat2c",options=set())
+    trailingEnabled: bpy.props.BoolProperty(default=True, options=set(), description="If trailing is enabled then particles don't follow the particle emitter")
+    emissionRate: bpy.props.FloatProperty(default=10.0, name="emiss. rate", options={"ANIMATABLE"})
+    emissionAreaType: bpy.props.EnumProperty(default="2", items=emissionAreaTypeList, update=handleParticleSystemTypeOrNameChange, options=set())
+    cutoutEmissionArea: bpy.props.BoolProperty(options=set())
+    emissionAreaSize: bpy.props.FloatVectorProperty(default=(0.1, 0.1, 0.1), name="emis. area size", update=handleParticleSystemAreaSizeChange, size=3, subtype="XYZ", options={"ANIMATABLE"})
+    emissionAreaCutoutSize: bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), name="tail unk.", size=3, subtype="XYZ", options={"ANIMATABLE"})
+    emissionAreaRadius: bpy.props.FloatProperty(default=2.0, name="emis. area radius", update=handleParticleSystemAreaSizeChange, options={"ANIMATABLE"})
+    emissionAreaCutoutRadius: bpy.props.FloatProperty(default=0.0, name="spread unk.", options={"ANIMATABLE"})
+    spawnPoints: bpy.props.CollectionProperty(type=M3ParticleSpawnPoint)
+    emissionType: bpy.props.EnumProperty(default="0", items=particleEmissionTypeList, options=set())
+    randomizeWithParticleSizes2: bpy.props.BoolProperty(default=False, options=set(), description="Specifies if particles have random sizes")
+    particleSizes2: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), name="particle sizes 2", size=3, subtype="XYZ", options={"ANIMATABLE"}, description="The first two values are used to determine a random initial and final size for a particle")
+    randomizeWithRotationValues2: bpy.props.BoolProperty(default=False, options=set())
+    rotationValues2: bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), name="rotation values 2", size=3, subtype="XYZ", options={"ANIMATABLE"})
+    randomizeWithColor2: bpy.props.BoolProperty(default=False, options=set())
+    initialColor2: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, name="initial color 2", size=4, subtype="COLOR", options={"ANIMATABLE"})
+    middleColor2: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, name="unknown color 2", size=4, subtype="COLOR", options={"ANIMATABLE"})
+    finalColor2: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0, 0.0), min = 0.0, max = 1.0, name="final color 2", size=4, subtype="COLOR", options={"ANIMATABLE"})
+    partEmit: bpy.props.IntProperty(default=0, subtype="UNSIGNED", options={"ANIMATABLE"})
+    phase1StartImageIndex: bpy.props.IntProperty(default=0, min=0, max=255, subtype="UNSIGNED", options=set(), description="Specifies the cell index shown at start of phase 1 when the image got divided into rows and collumns")
+    phase1EndImageIndex: bpy.props.IntProperty(default=0, min=0, max=255, subtype="UNSIGNED", options=set(), description="Specifies the cell index shown at end of phase 1 when the image got divided into rows and collumns")
+    phase2StartImageIndex: bpy.props.IntProperty(default=0, min=0, max=255, subtype="UNSIGNED", options=set(), description="Specifies the cell index shown at start of phase 2 when the image got divided into rows and collumns")
+    phase2EndImageIndex: bpy.props.IntProperty(default=0, min=0, max=255, subtype="UNSIGNED", options=set(), description="Specifies the cell index shown at end of phase 2 when the image got divided into rows and collumns")
+    relativePhase1Length: bpy.props.FloatProperty(default=1.0, min=0.0, max=1.0, subtype="FACTOR", name="relative phase 1 length", options=set(), description="A value of 0.4 means that 40% of the lifetime of the particle the phase 1 image animation will play")
+    numberOfColumns: bpy.props.IntProperty(default=0, min=0, subtype="UNSIGNED", name="columns", options=set(), description="Specifies in how many columns the image gets divided")
+    numberOfRows: bpy.props.IntProperty(default=0, min=0, subtype="UNSIGNED", name="rows", options=set(), description="Specifies in how many rows the image gets divided")
+    columnWidth: bpy.props.FloatProperty(default=float("inf"), min=0.0, max=1.0, name="columnWidth", options=set(), description="Specifies the width of one column, relative to an image with width 1")
+    rowHeight: bpy.props.FloatProperty(default=float("inf"), min=0.0, max=1.0, name="rowHeight", options=set(), description="Specifies the height of one row, relative to an image with height 1")
+    unknownFloat4: bpy.props.FloatProperty(default=0.0, name="unknownFloat4",options=set())
+    unknownFloat5: bpy.props.FloatProperty(default=1.0, name="unknownFloat5",options=set())
+    unknownFloat6: bpy.props.FloatProperty(default=1.0, name="unknownFloat6",options=set())
+    unknownFloat7: bpy.props.FloatProperty(default=1.0, name="unknownFloat7",options=set())
+    particleType: bpy.props.EnumProperty(default="0", items=particleTypeList, options=set())
+    lengthWidthRatio: bpy.props.FloatProperty(default=1.0, name="lengthWidthRatio",options=set())
+    localForceChannels: bpy.props.BoolVectorProperty(default=tuple(16*[False]), size=16, subtype="LAYER", options=set(), description="If a model internal force shares a local force channel with a particle system then it affects it")
+    worldForceChannels: bpy.props.BoolVectorProperty(default=tuple(16*[False]), size=16, subtype="LAYER", options=set(), description="If a force shares a force channel with a particle system then it affects it")
+    copies: bpy.props.CollectionProperty(type=M3ParticleSystemCopy)
+    copyIndex: bpy.props.IntProperty(options=set(), update=handlePartileSystemCopyIndexChanged)
+    trailingParticlesName: bpy.props.StringProperty(options=set())
+    trailingParticlesChance: bpy.props.FloatProperty(default=0.0, min=0.0, max=1.0, subtype="FACTOR", name="trailingParticlesChance",options=set())
+    trailingParticlesRate: bpy.props.FloatProperty(default=10.0, name="trail. emiss. rate", options={"ANIMATABLE"})
+    noiseAmplitude: bpy.props.FloatProperty(default=0.0, name="noiseAmplitude",options=set())
+    noiseFrequency: bpy.props.FloatProperty(default=0.0, name="noiseFrequency",options=set())
+    noiseCohesion: bpy.props.FloatProperty(default=0.0, name="noiseCohesion",options=set(), description="Prevents the particles from spreading to far from noise")
+    noiseEdge: bpy.props.FloatProperty(default=0.0, min=0.0, max=0.5, subtype="FACTOR", name="noiseEdge", options=set(), description="The closer the value is to 0.5 the less noise will be at the start of particles life time")
+    sort: bpy.props.BoolProperty(options=set())
+    collideTerrain: bpy.props.BoolProperty(options=set())
+    collideObjects: bpy.props.BoolProperty(options=set())
+    spawnOnBounce: bpy.props.BoolProperty(options=set())
+    inheritEmissionParams: bpy.props.BoolProperty(options=set())
+    inheritParentVel: bpy.props.BoolProperty(options=set())
+    sortByZHeight: bpy.props.BoolProperty(options=set())
+    reverseIteration: bpy.props.BoolProperty(options=set())
+    litParts: bpy.props.BoolProperty(options=set())
+    randFlipBookStart: bpy.props.BoolProperty(options=set())
+    multiplyByGravity: bpy.props.BoolProperty(options=set())
+    clampTailParts: bpy.props.BoolProperty(options=set())
+    spawnTrailingParts: bpy.props.BoolProperty(options=set())
+    fixLengthTailParts: bpy.props.BoolProperty(options=set())
+    useVertexAlpha: bpy.props.BoolProperty(options=set())
+    modelParts: bpy.props.BoolProperty(options=set())
+    swapYZonModelParts: bpy.props.BoolProperty(options=set())
+    scaleTimeByParent: bpy.props.BoolProperty(options=set())
+    useLocalTime: bpy.props.BoolProperty(options=set())
+    simulateOnInit: bpy.props.BoolProperty(options=set())
+    copy: bpy.props.BoolProperty(options=set())
 
 class M3RibbonEndPoint(bpy.types.PropertyGroup):
     # nane is also bone name
-    name = bpy.props.StringProperty(options=set())
+    name: bpy.props.StringProperty(options=set())
     
 
 class M3Ribbon(bpy.types.PropertyGroup):
     # name attribute seems to be needed for template_list but is not actually in the m3 file
     # The name gets calculated like this: name = boneSuffix (type)
-    name = bpy.props.StringProperty(options=set())
-    boneSuffix = bpy.props.StringProperty(options=set(), update=handleRibbonBoneSuffixChange, default="Particle System")
-    boneName = bpy.props.StringProperty(options=set())
-    updateBlenderBoneShapes = bpy.props.BoolProperty(default=True, options=set())
-    materialName = bpy.props.StringProperty(options=set())
-    waveLength = bpy.props.FloatProperty(default=1.0, name="waveLength", options={"ANIMATABLE"})
-    tipOffsetZ = bpy.props.FloatProperty(default=0.0, name="tipOffsetZ", options=set())
-    centerBias = bpy.props.FloatProperty(default=0.5, name="centerBias", options=set())
-    radiusScale =  bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
-    twist = bpy.props.FloatProperty(default=0.0, name="twist", options=set())
-    baseColoring = bpy.props.FloatVectorProperty(name="color", default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=4, subtype="COLOR", options={"ANIMATABLE"})
-    centerColoring = bpy.props.FloatVectorProperty(name="color", default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=4, subtype="COLOR", options={"ANIMATABLE"})
-    tipColoring = bpy.props.FloatVectorProperty(name="color", default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=4, subtype="COLOR", options={"ANIMATABLE"})
-    stretchAmount = bpy.props.FloatProperty(default=1.0, name="stretchAmount", options=set())
-    stretchLimit = bpy.props.FloatProperty(default=1.0, name="stretchLimit", options=set())
-    surfaceNoiseAmplitude = bpy.props.FloatProperty(default=0.0, name="surfaceNoiseAmplitude", options=set())
-    surfaceNoiseNumberOfWaves = bpy.props.FloatProperty(default=0.0, name="surfaceNoiseNumberOfWaves", options=set())
-    surfaceNoiseFrequency = bpy.props.FloatProperty(default=0.0, name="surfaceNoiseFrequency", options=set())
-    surfaceNoiseScale = bpy.props.FloatProperty(default=0.2, name="surfaceNoiseScale", options=set())
-    ribbonType = bpy.props.EnumProperty(default="0", items=ribbonTypeList, options=set())
-    ribbonDivisions = bpy.props.FloatProperty(default=20.0, name="ribbonDivisions", options=set())
-    ribbonSides = bpy.props.IntProperty(default=5, subtype="UNSIGNED",options=set())
-    ribbonLength = bpy.props.FloatProperty(default=1.0, name="ribbonLength", options={"ANIMATABLE"})
-    directionVariationBool = bpy.props.BoolProperty(default=False, options=set())
-    directionVariationAmount = bpy.props.FloatProperty(default=0.0, name="directionVariationAmount", options={"ANIMATABLE"})
-    directionVariationFrequency = bpy.props.FloatProperty(default=0.0, name="directionVariationFrequency", options={"ANIMATABLE"})
-    amplitudeVariationBool = bpy.props.BoolProperty(default=False, options=set())
-    amplitudeVariationAmount = bpy.props.FloatProperty(default=0.0, name="amplitudeVariationAmount", options={"ANIMATABLE"})
-    amplitudeVariationFrequency = bpy.props.FloatProperty(default=0.0, name="amplitudeVariationFrequency", options={"ANIMATABLE"})
-    lengthVariationBool = bpy.props.BoolProperty(default=False, options=set())
-    lengthVariationAmount = bpy.props.FloatProperty(default=0.0, name="lengthVariationAmount", options={"ANIMATABLE"})
-    lengthVariationFrequency = bpy.props.FloatProperty(default=0.0, name="lengthVariationFrequency", options={"ANIMATABLE"})
-    radiusVariationBool = bpy.props.BoolProperty(default=False, options=set())
-    radiusVariationAmount = bpy.props.FloatProperty(default=0.0, name="radiusVariationAmount", options={"ANIMATABLE"})
-    radiusVariationFrequency = bpy.props.FloatProperty(default=0.0, name="radiusVariationFrequency", options={"ANIMATABLE"})
-    collideWithTerrain = bpy.props.BoolProperty(default=False, options=set())
-    collideWithObjects = bpy.props.BoolProperty(default=False, options=set())
-    edgeFalloff = bpy.props.BoolProperty(default=False, options=set())
-    inheritParentVelocity = bpy.props.BoolProperty(default=False, options=set())
-    smoothSize = bpy.props.BoolProperty(default=False, options=set())
-    bezierSmoothSize = bpy.props.BoolProperty(default=False, options=set())
-    useVertexAlpha = bpy.props.BoolProperty(default=False, options=set())
-    scaleTimeByParent = bpy.props.BoolProperty(default=False, options=set())
-    forceLegacy = bpy.props.BoolProperty(default=False, options=set())
-    useLocaleTime = bpy.props.BoolProperty(default=False, options=set())
-    simulateOnInitialization = bpy.props.BoolProperty(default=False, options=set())
-    useLengthAndTime = bpy.props.BoolProperty(default=False, options=set())
-    endPoints = bpy.props.CollectionProperty(type=M3RibbonEndPoint)
-    endPointIndex = bpy.props.IntProperty(default=-1, options=set(), update=handleRibbonEndPointIndexChanged)
+    name: bpy.props.StringProperty(options=set())
+    boneSuffix: bpy.props.StringProperty(options=set(), update=handleRibbonBoneSuffixChange, default="Particle System")
+    boneName: bpy.props.StringProperty(options=set())
+    updateBlenderBoneShapes: bpy.props.BoolProperty(default=True, options=set())
+    materialName: bpy.props.StringProperty(options=set())
+    waveLength: bpy.props.FloatProperty(default=1.0, name="waveLength", options={"ANIMATABLE"})
+    tipOffsetZ: bpy.props.FloatProperty(default=0.0, name="tipOffsetZ", options=set())
+    centerBias: bpy.props.FloatProperty(default=0.5, name="centerBias", options=set())
+    radiusScale: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), size=3, subtype="XYZ", options={"ANIMATABLE"})
+    twist: bpy.props.FloatProperty(default=0.0, name="twist", options=set())
+    baseColoring: bpy.props.FloatVectorProperty(name="color", default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=4, subtype="COLOR", options={"ANIMATABLE"})
+    centerColoring: bpy.props.FloatVectorProperty(name="color", default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=4, subtype="COLOR", options={"ANIMATABLE"})
+    tipColoring: bpy.props.FloatVectorProperty(name="color", default=(1.0, 1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=4, subtype="COLOR", options={"ANIMATABLE"})
+    stretchAmount: bpy.props.FloatProperty(default=1.0, name="stretchAmount", options=set())
+    stretchLimit: bpy.props.FloatProperty(default=1.0, name="stretchLimit", options=set())
+    surfaceNoiseAmplitude: bpy.props.FloatProperty(default=0.0, name="surfaceNoiseAmplitude", options=set())
+    surfaceNoiseNumberOfWaves: bpy.props.FloatProperty(default=0.0, name="surfaceNoiseNumberOfWaves", options=set())
+    surfaceNoiseFrequency: bpy.props.FloatProperty(default=0.0, name="surfaceNoiseFrequency", options=set())
+    surfaceNoiseScale: bpy.props.FloatProperty(default=0.2, name="surfaceNoiseScale", options=set())
+    ribbonType: bpy.props.EnumProperty(default="0", items=ribbonTypeList, options=set())
+    ribbonDivisions: bpy.props.FloatProperty(default=20.0, name="ribbonDivisions", options=set())
+    ribbonSides: bpy.props.IntProperty(default=5, subtype="UNSIGNED",options=set())
+    ribbonLength: bpy.props.FloatProperty(default=1.0, name="ribbonLength", options={"ANIMATABLE"})
+    directionVariationBool: bpy.props.BoolProperty(default=False, options=set())
+    directionVariationAmount: bpy.props.FloatProperty(default=0.0, name="directionVariationAmount", options={"ANIMATABLE"})
+    directionVariationFrequency: bpy.props.FloatProperty(default=0.0, name="directionVariationFrequency", options={"ANIMATABLE"})
+    amplitudeVariationBool: bpy.props.BoolProperty(default=False, options=set())
+    amplitudeVariationAmount: bpy.props.FloatProperty(default=0.0, name="amplitudeVariationAmount", options={"ANIMATABLE"})
+    amplitudeVariationFrequency: bpy.props.FloatProperty(default=0.0, name="amplitudeVariationFrequency", options={"ANIMATABLE"})
+    lengthVariationBool: bpy.props.BoolProperty(default=False, options=set())
+    lengthVariationAmount: bpy.props.FloatProperty(default=0.0, name="lengthVariationAmount", options={"ANIMATABLE"})
+    lengthVariationFrequency: bpy.props.FloatProperty(default=0.0, name="lengthVariationFrequency", options={"ANIMATABLE"})
+    radiusVariationBool: bpy.props.BoolProperty(default=False, options=set())
+    radiusVariationAmount: bpy.props.FloatProperty(default=0.0, name="radiusVariationAmount", options={"ANIMATABLE"})
+    radiusVariationFrequency: bpy.props.FloatProperty(default=0.0, name="radiusVariationFrequency", options={"ANIMATABLE"})
+    collideWithTerrain: bpy.props.BoolProperty(default=False, options=set())
+    collideWithObjects: bpy.props.BoolProperty(default=False, options=set())
+    edgeFalloff: bpy.props.BoolProperty(default=False, options=set())
+    inheritParentVelocity: bpy.props.BoolProperty(default=False, options=set())
+    smoothSize: bpy.props.BoolProperty(default=False, options=set())
+    bezierSmoothSize: bpy.props.BoolProperty(default=False, options=set())
+    useVertexAlpha: bpy.props.BoolProperty(default=False, options=set())
+    scaleTimeByParent: bpy.props.BoolProperty(default=False, options=set())
+    forceLegacy: bpy.props.BoolProperty(default=False, options=set())
+    useLocaleTime: bpy.props.BoolProperty(default=False, options=set())
+    simulateOnInitialization: bpy.props.BoolProperty(default=False, options=set())
+    useLengthAndTime: bpy.props.BoolProperty(default=False, options=set())
+    endPoints: bpy.props.CollectionProperty(type=M3RibbonEndPoint)
+    endPointIndex: bpy.props.IntProperty(default=-1, options=set(), update=handleRibbonEndPointIndexChanged)
 
 
 class M3Force(bpy.types.PropertyGroup):
     # name attribute seems to be needed for template_list but is not actually in the m3 file
     # The name gets calculated like this: name = boneSuffix (type)
-    name = bpy.props.StringProperty(options=set())
-    updateBlenderBoneShape = bpy.props.BoolProperty(default=True, options=set())
-    boneSuffix = bpy.props.StringProperty(options=set(), update=handleForceTypeOrBoneSuffixChange, default="Particle System")
-    boneName = bpy.props.StringProperty(options=set())
-    type = bpy.props.EnumProperty(default="0", items=forceTypeList, update=handleForceTypeOrBoneSuffixChange, options=set())
-    shape = bpy.props.EnumProperty(default="0", items=forceShapeList, update=handleForceTypeOrBoneSuffixChange, options=set())
-    channels = bpy.props.BoolVectorProperty(default=tuple(32*[False]), size=32, subtype="LAYER", options=set(), description="If a force shares a force channel with a particle system then it affects it")
-    strength = bpy.props.FloatProperty(default=1.0, name="Strength", options={"ANIMATABLE"})
-    width = bpy.props.FloatProperty(default=1.0, name="Radius/Width", update=handleForceRangeUpdate, options={"ANIMATABLE"})
-    height = bpy.props.FloatProperty(default=0.05, name="Height/Angle", options={"ANIMATABLE"})
-    length = bpy.props.FloatProperty(default=0.05, name="Length", options={"ANIMATABLE"})
-    useFalloff = bpy.props.BoolProperty(options=set())
-    useHeightGradient = bpy.props.BoolProperty(options=set())
-    unbounded = bpy.props.BoolProperty(options=set())
+    name: bpy.props.StringProperty(options=set())
+    updateBlenderBoneShape: bpy.props.BoolProperty(default=True, options=set())
+    boneSuffix: bpy.props.StringProperty(options=set(), update=handleForceTypeOrBoneSuffixChange, default="Particle System")
+    boneName: bpy.props.StringProperty(options=set())
+    type: bpy.props.EnumProperty(default="0", items=forceTypeList, update=handleForceTypeOrBoneSuffixChange, options=set())
+    shape: bpy.props.EnumProperty(default="0", items=forceShapeList, update=handleForceTypeOrBoneSuffixChange, options=set())
+    channels: bpy.props.BoolVectorProperty(default=tuple(32*[False]), size=32, subtype="LAYER", options=set(), description="If a force shares a force channel with a particle system then it affects it")
+    strength: bpy.props.FloatProperty(default=1.0, name="Strength", options={"ANIMATABLE"})
+    width: bpy.props.FloatProperty(default=1.0, name="Radius/Width", update=handleForceRangeUpdate, options={"ANIMATABLE"})
+    height: bpy.props.FloatProperty(default=0.05, name="Height/Angle", options={"ANIMATABLE"})
+    length: bpy.props.FloatProperty(default=0.05, name="Length", options={"ANIMATABLE"})
+    useFalloff: bpy.props.BoolProperty(options=set())
+    useHeightGradient: bpy.props.BoolProperty(options=set())
+    unbounded: bpy.props.BoolProperty(options=set())
 
 class M3PhysicsShape(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(options=set())
-    updateBlenderBoneShapes = bpy.props.BoolProperty(default=True, options=set())
-    offset = bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", update=handlePhysicsShapeUpdate)
-    rotationEuler = bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), size=3, subtype="EULER", unit="ROTATION", update=handlePhysicsShapeUpdate)
-    scale = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), size=3, subtype="XYZ", update=handlePhysicsShapeUpdate)
-    shape = bpy.props.EnumProperty(default="0", items=physicsShapeTypeList, update=handlePhysicsShapeUpdate, options=set())
-    meshObjectName = bpy.props.StringProperty(name="meshName", options=set())
+    name: bpy.props.StringProperty(options=set())
+    updateBlenderBoneShapes: bpy.props.BoolProperty(default=True, options=set())
+    offset: bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", update=handlePhysicsShapeUpdate)
+    rotationEuler: bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), size=3, subtype="EULER", unit="ROTATION", update=handlePhysicsShapeUpdate)
+    scale: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), size=3, subtype="XYZ", update=handlePhysicsShapeUpdate)
+    shape: bpy.props.EnumProperty(default="0", items=physicsShapeTypeList, update=handlePhysicsShapeUpdate, options=set())
+    meshObjectName: bpy.props.StringProperty(name="meshName", options=set())
     # TODO: convex hull properties...
-    size0 = bpy.props.FloatProperty(default=1.0, name="size0", update=handlePhysicsShapeUpdate, options=set())
-    size1 = bpy.props.FloatProperty(default=1.0, name="size1", update=handlePhysicsShapeUpdate, options=set())
-    size2 = bpy.props.FloatProperty(default=1.0, name="size2", update=handlePhysicsShapeUpdate, options=set())
+    size0: bpy.props.FloatProperty(default=1.0, name="size0", update=handlePhysicsShapeUpdate, options=set())
+    size1: bpy.props.FloatProperty(default=1.0, name="size1", update=handlePhysicsShapeUpdate, options=set())
+    size2: bpy.props.FloatProperty(default=1.0, name="size2", update=handlePhysicsShapeUpdate, options=set())
 
 class M3RigidBody(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(options=set())
-    boneName = bpy.props.StringProperty(name="boneName", update=handleRigidBodyBoneChange, options=set())
-    unknownAt0 = bpy.props.FloatProperty(default=5.0, name="unknownAt0", options=set())
-    unknownAt4 = bpy.props.FloatProperty(default=4.0, name="unknownAt4", options=set())
-    unknownAt8 = bpy.props.FloatProperty(default=0.8, name="unknownAt8", options=set())
+    name: bpy.props.StringProperty(options=set())
+    boneName: bpy.props.StringProperty(name="boneName", update=handleRigidBodyBoneChange, options=set())
+    unknownAt0: bpy.props.FloatProperty(default=5.0, name="unknownAt0", options=set())
+    unknownAt4: bpy.props.FloatProperty(default=4.0, name="unknownAt4", options=set())
+    unknownAt8: bpy.props.FloatProperty(default=0.8, name="unknownAt8", options=set())
     # skip other unknown values for now
-    physicsShapes = bpy.props.CollectionProperty(type=M3PhysicsShape)
-    physicsShapeIndex = bpy.props.IntProperty(options=set())
-    collidable = bpy.props.BoolProperty(default=True, options=set())
-    walkable = bpy.props.BoolProperty(default=False, options=set())
-    stackable = bpy.props.BoolProperty(default=False, options=set())
-    simulateOnCollision = bpy.props.BoolProperty(default=False, options=set())
-    ignoreLocalBodies = bpy.props.BoolProperty(default=False, options=set())
-    alwaysExists = bpy.props.BoolProperty(default=False, options=set())
-    doNotSimulate = bpy.props.BoolProperty(default=False, options=set())
-    localForces = bpy.props.BoolVectorProperty(default=tuple(16*[False]), size=16, subtype="LAYER", options=set())
-    wind = bpy.props.BoolProperty(default=False, options=set())
-    explosion = bpy.props.BoolProperty(default=False, options=set())
-    energy = bpy.props.BoolProperty(default=False, options=set())
-    blood = bpy.props.BoolProperty(default=False, options=set())
-    magnetic = bpy.props.BoolProperty(default=False, options=set())
-    grass = bpy.props.BoolProperty(default=False, options=set())
-    brush = bpy.props.BoolProperty(default=False, options=set())
-    trees = bpy.props.BoolProperty(default=False, options=set())
-    priority = bpy.props.IntProperty(default=0, options=set())
+    physicsShapes: bpy.props.CollectionProperty(type=M3PhysicsShape)
+    physicsShapeIndex: bpy.props.IntProperty(options=set())
+    collidable: bpy.props.BoolProperty(default=True, options=set())
+    walkable: bpy.props.BoolProperty(default=False, options=set())
+    stackable: bpy.props.BoolProperty(default=False, options=set())
+    simulateOnCollision: bpy.props.BoolProperty(default=False, options=set())
+    ignoreLocalBodies: bpy.props.BoolProperty(default=False, options=set())
+    alwaysExists: bpy.props.BoolProperty(default=False, options=set())
+    doNotSimulate: bpy.props.BoolProperty(default=False, options=set())
+    localForces: bpy.props.BoolVectorProperty(default=tuple(16*[False]), size=16, subtype="LAYER", options=set())
+    wind: bpy.props.BoolProperty(default=False, options=set())
+    explosion: bpy.props.BoolProperty(default=False, options=set())
+    energy: bpy.props.BoolProperty(default=False, options=set())
+    blood: bpy.props.BoolProperty(default=False, options=set())
+    magnetic: bpy.props.BoolProperty(default=False, options=set())
+    grass: bpy.props.BoolProperty(default=False, options=set())
+    brush: bpy.props.BoolProperty(default=False, options=set())
+    trees: bpy.props.BoolProperty(default=False, options=set())
+    priority: bpy.props.IntProperty(default=0, options=set())
 
 class M3AttachmentPoint(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", options=set())
-    updateBlenderBone = bpy.props.BoolProperty(default=True, options=set())
-    boneSuffix = bpy.props.StringProperty(name="boneSuffix", update=handleAttachmentPointTypeOrBoneSuffixChange)
-    boneName = bpy.props.StringProperty(name="boneName", options=set())
-    volumeType = bpy.props.EnumProperty(default="-1",update=handleAttachmentVolumeTypeChange, items=attachmentVolumeTypeList, options=set())
-    volumeSize0 = bpy.props.FloatProperty(default=1.0, options=set(), update=handleAttachmentVolumeSizeChange)
-    volumeSize1 = bpy.props.FloatProperty(default=0.0, options=set(), update=handleAttachmentVolumeSizeChange)
-    volumeSize2 = bpy.props.FloatProperty(default=0.0, options=set(), update=handleAttachmentVolumeSizeChange)
+    name: bpy.props.StringProperty(name="name", options=set())
+    updateBlenderBone: bpy.props.BoolProperty(default=True, options=set())
+    boneSuffix: bpy.props.StringProperty(name="boneSuffix", update=handleAttachmentPointTypeOrBoneSuffixChange)
+    boneName: bpy.props.StringProperty(name="boneName", options=set())
+    volumeType: bpy.props.EnumProperty(default="-1",update=handleAttachmentVolumeTypeChange, items=attachmentVolumeTypeList, options=set())
+    volumeSize0: bpy.props.FloatProperty(default=1.0, options=set(), update=handleAttachmentVolumeSizeChange)
+    volumeSize1: bpy.props.FloatProperty(default=0.0, options=set(), update=handleAttachmentVolumeSizeChange)
+    volumeSize2: bpy.props.FloatProperty(default=0.0, options=set(), update=handleAttachmentVolumeSizeChange)
 
 class M3SimpleGeometricShape(bpy.types.PropertyGroup):
-    name = bpy.props.StringProperty(name="name", default="", options=set())
-    updateBlenderBone = bpy.props.BoolProperty(default=True, options=set())
-    boneName = bpy.props.StringProperty(name="boneName", update=handleGeometicShapeTypeOrBoneNameUpdate, options=set())
-    shape = bpy.props.EnumProperty(default="1", items=geometricShapeTypeList, update=handleGeometicShapeTypeOrBoneNameUpdate, options=set())
-    size0 = bpy.props.FloatProperty(default=1.0, update=handleGeometicShapeUpdate, options=set())
-    size1 = bpy.props.FloatProperty(default=0.0, update=handleGeometicShapeUpdate, options=set())
-    size2 = bpy.props.FloatProperty(default=0.0, update=handleGeometicShapeUpdate, options=set())
-    offset = bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", update=handleGeometicShapeUpdate,options=set())
-    rotationEuler = bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), size=3, subtype="EULER", unit="ROTATION", update=handleGeometicShapeUpdate, options=set())
-    scale = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), size=3, subtype="XYZ", update=handleGeometicShapeUpdate, options=set())
+    name: bpy.props.StringProperty(name="name", default="", options=set())
+    updateBlenderBone: bpy.props.BoolProperty(default=True, options=set())
+    boneName: bpy.props.StringProperty(name="boneName", update=handleGeometicShapeTypeOrBoneNameUpdate, options=set())
+    shape: bpy.props.EnumProperty(default="1", items=geometricShapeTypeList, update=handleGeometicShapeTypeOrBoneNameUpdate, options=set())
+    size0: bpy.props.FloatProperty(default=1.0, update=handleGeometicShapeUpdate, options=set())
+    size1: bpy.props.FloatProperty(default=0.0, update=handleGeometicShapeUpdate, options=set())
+    size2: bpy.props.FloatProperty(default=0.0, update=handleGeometicShapeUpdate, options=set())
+    offset: bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), size=3, subtype="XYZ", update=handleGeometicShapeUpdate,options=set())
+    rotationEuler: bpy.props.FloatVectorProperty(default=(0.0, 0.0, 0.0), size=3, subtype="EULER", unit="ROTATION", update=handleGeometicShapeUpdate, options=set())
+    scale: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), size=3, subtype="XYZ", update=handleGeometicShapeUpdate, options=set())
 
 class M3BoneVisiblityOptions(bpy.types.PropertyGroup):
-    showFuzzyHitTests = bpy.props.BoolProperty(default=True, options=set(), update=handleFuzzyHitTestVisiblityUpdate)
-    showTightHitTest = bpy.props.BoolProperty(default=True, options=set(), update=handleTightHitTestVisiblityUpdate)
-    showAttachmentPoints = bpy.props.BoolProperty(default=True, options=set(), update=handleAttachmentPointVisibilityUpdate)
-    showParticleSystems = bpy.props.BoolProperty(default=True, options=set(), update=handleParticleSystemsVisiblityUpdate)
-    showRibbons = bpy.props.BoolProperty(default=True, options=set(), update=handleRibbonsVisiblityUpdate)
-    showLights = bpy.props.BoolProperty(default=True, options=set(), update=handleLightsVisiblityUpdate)
-    showForces = bpy.props.BoolProperty(default=True, options=set(), update=handleForcesVisiblityUpdate)
-    showCameras = bpy.props.BoolProperty(default=True, options=set(), update=handleCamerasVisiblityUpdate)
-    showPhysicsShapes = bpy.props.BoolProperty(default=True, options=set(), update=handlePhysicsShapeVisibilityUpdate)
-    showProjections = bpy.props.BoolProperty(default=True, options=set(), update=handleProjectionVisibilityUpdate)
-    showWarps = bpy.props.BoolProperty(default=True, options=set(), update=handleWarpVisibilityUpdate)
+    showFuzzyHitTests: bpy.props.BoolProperty(default=True, options=set(), update=handleFuzzyHitTestVisiblityUpdate)
+    showTightHitTest: bpy.props.BoolProperty(default=True, options=set(), update=handleTightHitTestVisiblityUpdate)
+    showAttachmentPoints: bpy.props.BoolProperty(default=True, options=set(), update=handleAttachmentPointVisibilityUpdate)
+    showParticleSystems: bpy.props.BoolProperty(default=True, options=set(), update=handleParticleSystemsVisiblityUpdate)
+    showRibbons: bpy.props.BoolProperty(default=True, options=set(), update=handleRibbonsVisiblityUpdate)
+    showLights: bpy.props.BoolProperty(default=True, options=set(), update=handleLightsVisiblityUpdate)
+    showForces: bpy.props.BoolProperty(default=True, options=set(), update=handleForcesVisiblityUpdate)
+    showCameras: bpy.props.BoolProperty(default=True, options=set(), update=handleCamerasVisiblityUpdate)
+    showPhysicsShapes: bpy.props.BoolProperty(default=True, options=set(), update=handlePhysicsShapeVisibilityUpdate)
+    showProjections: bpy.props.BoolProperty(default=True, options=set(), update=handleProjectionVisibilityUpdate)
+    showWarps: bpy.props.BoolProperty(default=True, options=set(), update=handleWarpVisibilityUpdate)
 
 class M3ExportOptions(bpy.types.PropertyGroup):
-    path = bpy.props.StringProperty(name="path", default="ExportedModel.m3", options=set())
-    testPatch20Format = bpy.props.BoolProperty(default=False, options=set())
-    animationExportAmount = bpy.props.EnumProperty(default=shared.exportAmountAllAnimations, items=animationExportAmount, options=set())
+    path: bpy.props.StringProperty(name="path", default="ExportedModel.m3", options=set())
+    testPatch20Format: bpy.props.BoolProperty(default=False, options=set())
+    animationExportAmount: bpy.props.EnumProperty(default=shared.exportAmountAllAnimations, items=animationExportAmount, options=set())
 
 class M3ImportOptions(bpy.types.PropertyGroup):
-    path = bpy.props.StringProperty(name="path", default="", options=set())
-    rootDirectory = bpy.props.StringProperty(name="rootDirectory", default="", options=set())
-    generateBlenderMaterials = bpy.props.BoolProperty(default=True, options=set())
-    applySmoothShading = bpy.props.BoolProperty(default=True, options=set())
-    markSharpEdges = bpy.props.BoolProperty(default=True, options=set())
-    recalculateRestPositionBones = bpy.props.BoolProperty(default=False, options=set())
-    teamColor = bpy.props.FloatVectorProperty(default=(1.0, 0.0, 0.0), min = 0.0, max = 1.0, name="team color", size=3, subtype="COLOR", options=set(), description="Team color place holder used for generated blender materials")
-    contentToImport = bpy.props.EnumProperty(default="EVERYTHING", items=contentToImportList, options=set())
+    path: bpy.props.StringProperty(name="path", default="", options=set())
+    rootDirectory: bpy.props.StringProperty(name="rootDirectory", default="", options=set())
+    generateBlenderMaterials: bpy.props.BoolProperty(default=True, options=set())
+    applySmoothShading: bpy.props.BoolProperty(default=True, options=set())
+    markSharpEdges: bpy.props.BoolProperty(default=True, options=set())
+    recalculateRestPositionBones: bpy.props.BoolProperty(default=False, options=set())
+    teamColor: bpy.props.FloatVectorProperty(default=(1.0, 0.0, 0.0), min = 0.0, max = 1.0, name="team color", size=3, subtype="COLOR", options=set(), description="Team color place holder used for generated blender materials")
+    contentToImport: bpy.props.EnumProperty(default="EVERYTHING", items=contentToImportList, options=set())
 
 
 class M3Projection(bpy.types.PropertyGroup):
     # name attribute seems to be needed for template_list but is not actually in the m3 file
     # The name gets calculated like this: name = boneSuffix (type)
-    name = bpy.props.StringProperty(options=set())
-    updateBlenderBone = bpy.props.BoolProperty(default=True, options=set())
-    boneSuffix = bpy.props.StringProperty(options=set(), update=handleProjectionTypeOrBoneSuffixChange, default="Projection")
-    boneName = bpy.props.StringProperty(options=set())
-    materialName = bpy.props.StringProperty(options=set())
-    projectionType = bpy.props.EnumProperty(default=shared.projectionTypeOrthonormal, items=projectionTypeList, options=set(), update=handleProjectionTypeOrBoneSuffixChange)
-    fieldOfView = bpy.props.FloatProperty(default=45.0, name="FOV", options={"ANIMATABLE"}, description="represents the angle (in degrees) that defines the vertical bounds of the projector")
-    aspectRatio = bpy.props.FloatProperty(default=1.0, name="Aspect Ratio", options={"ANIMATABLE"})
-    near = bpy.props.FloatProperty(default=0.5, name="Near", options={"ANIMATABLE"})
-    far = bpy.props.FloatProperty(default=10.0, name="Far", options={"ANIMATABLE"})
-    depth = bpy.props.FloatProperty(default=10.0, name="Depth", options=set(), update=handleProjectionSizeChange)
-    width = bpy.props.FloatProperty(default=10.0, name="Width", options=set(), update=handleProjectionSizeChange)
-    height = bpy.props.FloatProperty(default=10.0, name="Height", options=set(), update=handleProjectionSizeChange)
-    alphaOverTimeStart = bpy.props.FloatProperty(default=0.0, name="Alpha over time start", options=set() )
-    alphaOverTimeMid = bpy.props.FloatProperty(default=1.0, name="Alpha over time mid", options=set() )
-    alphaOverTimeEnd = bpy.props.FloatProperty(default=0.0, name="Alpha over time end", options=set() )
+    name: bpy.props.StringProperty(options=set())
+    updateBlenderBone: bpy.props.BoolProperty(default=True, options=set())
+    boneSuffix: bpy.props.StringProperty(options=set(), update=handleProjectionTypeOrBoneSuffixChange, default="Projection")
+    boneName: bpy.props.StringProperty(options=set())
+    materialName: bpy.props.StringProperty(options=set())
+    projectionType: bpy.props.EnumProperty(default=shared.projectionTypeOrthonormal, items=projectionTypeList, options=set(), update=handleProjectionTypeOrBoneSuffixChange)
+    fieldOfView: bpy.props.FloatProperty(default=45.0, name="FOV", options={"ANIMATABLE"}, description="represents the angle (in degrees) that defines the vertical bounds of the projector")
+    aspectRatio: bpy.props.FloatProperty(default=1.0, name="Aspect Ratio", options={"ANIMATABLE"})
+    near: bpy.props.FloatProperty(default=0.5, name="Near", options={"ANIMATABLE"})
+    far: bpy.props.FloatProperty(default=10.0, name="Far", options={"ANIMATABLE"})
+    depth: bpy.props.FloatProperty(default=10.0, name="Depth", options=set(), update=handleProjectionSizeChange)
+    width: bpy.props.FloatProperty(default=10.0, name="Width", options=set(), update=handleProjectionSizeChange)
+    height: bpy.props.FloatProperty(default=10.0, name="Height", options=set(), update=handleProjectionSizeChange)
+    alphaOverTimeStart: bpy.props.FloatProperty(default=0.0, name="Alpha over time start", options=set() )
+    alphaOverTimeMid: bpy.props.FloatProperty(default=1.0, name="Alpha over time mid", options=set() )
+    alphaOverTimeEnd: bpy.props.FloatProperty(default=0.0, name="Alpha over time end", options=set() )
     
 
 
 class M3Warp(bpy.types.PropertyGroup):
     # name attribute seems to be needed for template_list but is not actually in the m3 file
     # The name gets calculated like this: name = boneSuffix (type)
-    name = bpy.props.StringProperty(options=set())
-    updateBlenderBone = bpy.props.BoolProperty(default=True, options=set())
-    boneSuffix = bpy.props.StringProperty(options=set(), update=handleWarpBoneSuffixChange, default="01")
-    boneName = bpy.props.StringProperty(options=set())
-    materialName = bpy.props.StringProperty(options=set())
+    name: bpy.props.StringProperty(options=set())
+    updateBlenderBone: bpy.props.BoolProperty(default=True, options=set())
+    boneSuffix: bpy.props.StringProperty(options=set(), update=handleWarpBoneSuffixChange, default="01")
+    boneName: bpy.props.StringProperty(options=set())
+    materialName: bpy.props.StringProperty(options=set())
 
-    radius = bpy.props.FloatProperty(default=1.0, min=0.0, name="radius", update=handleWarpRadiusChange, options={"ANIMATABLE"})
-    unknown9306aac0 = bpy.props.FloatProperty(default=10.0, name="unknown9306aac0", options={"ANIMATABLE"})
-    compressionStrength = bpy.props.FloatProperty(default=1.0, name="compressionStrength", options={"ANIMATABLE"})
-    unknown50c7f2b4 = bpy.props.FloatProperty(default=1.0, name="unknown50c7f2b4", options={"ANIMATABLE"})
-    unknown8d9c977c = bpy.props.FloatProperty(default=1.0, name="unknown8d9c977c", options={"ANIMATABLE"})
-    unknownca6025a2 = bpy.props.FloatProperty(default=1.0, name="unknownca6025a2", options={"ANIMATABLE"})
+    radius: bpy.props.FloatProperty(default=1.0, min=0.0, name="radius", update=handleWarpRadiusChange, options={"ANIMATABLE"})
+    unknown9306aac0: bpy.props.FloatProperty(default=10.0, name="unknown9306aac0", options={"ANIMATABLE"})
+    compressionStrength: bpy.props.FloatProperty(default=1.0, name="compressionStrength", options={"ANIMATABLE"})
+    unknown50c7f2b4: bpy.props.FloatProperty(default=1.0, name="unknown50c7f2b4", options={"ANIMATABLE"})
+    unknown8d9c977c: bpy.props.FloatProperty(default=1.0, name="unknown8d9c977c", options={"ANIMATABLE"})
+    unknownca6025a2: bpy.props.FloatProperty(default=1.0, name="unknownca6025a2", options={"ANIMATABLE"})
 
 
 class M3Light(bpy.types.PropertyGroup):
     # name attribute seems to be needed for template_list but is not actually in the m3 file
     # The name gets calculated like this: name = boneSuffix (type)
-    name = bpy.props.StringProperty(name="name", default="", options=set())
-    updateBlenderBone = bpy.props.BoolProperty(default=True, options=set())
-    lightType = bpy.props.EnumProperty(default="1", items=lightTypeList, options=set(), update=handleLightTypeOrBoneSuffixChange)
-    boneSuffix = bpy.props.StringProperty(options=set(), update=handleLightTypeOrBoneSuffixChange, default="Particle System")
-    boneName = bpy.props.StringProperty(options=set())
-    lightColor = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=3, subtype="COLOR", options={"ANIMATABLE"})
-    lightIntensity = bpy.props.FloatProperty(default=1.0, name="Light Intensity", options={"ANIMATABLE"})
-    specColor =  bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=3, subtype="COLOR", options={"ANIMATABLE"})
-    specIntensity = bpy.props.FloatProperty(default=0.0, name="Specular Intensity", options={"ANIMATABLE"})
-    attenuationNear = bpy.props.FloatProperty(default=2.5, name="attenuationNear", options={"ANIMATABLE"})
-    unknownAt148 = bpy.props.FloatProperty(default=2.5, name="unknownAt148", options=set())
-    attenuationFar = bpy.props.FloatProperty(default=3.0, name="attenuationFar", update=handleLightSizeChange, options={"ANIMATABLE"})
-    hotSpot = bpy.props.FloatProperty(default=1.0, name="Hot Spot", options={"ANIMATABLE"})
-    falloff = bpy.props.FloatProperty(default=1.0, name="Fall Off", update=handleLightSizeChange, options={"ANIMATABLE"})
-    unknownAt12 = bpy.props.IntProperty(default=-1, name="unknownAt12", options=set())
-    unknownAt8 = bpy.props.BoolProperty(default=False,options=set())
-    shadowCast = bpy.props.BoolProperty(options=set())
-    specular = bpy.props.BoolProperty(options=set())
-    unknownFlag0x04 = bpy.props.BoolProperty(options=set())
-    turnOn = bpy.props.BoolProperty(default=True,options=set())
+    name: bpy.props.StringProperty(name="name", default="", options=set())
+    updateBlenderBone: bpy.props.BoolProperty(default=True, options=set())
+    lightType: bpy.props.EnumProperty(default="1", items=lightTypeList, options=set(), update=handleLightTypeOrBoneSuffixChange)
+    boneSuffix: bpy.props.StringProperty(options=set(), update=handleLightTypeOrBoneSuffixChange, default="Particle System")
+    boneName: bpy.props.StringProperty(options=set())
+    lightColor: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=3, subtype="COLOR", options={"ANIMATABLE"})
+    lightIntensity: bpy.props.FloatProperty(default=1.0, name="Light Intensity", options={"ANIMATABLE"})
+    specColor: bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), min = 0.0, max = 1.0, size=3, subtype="COLOR", options={"ANIMATABLE"})
+    specIntensity: bpy.props.FloatProperty(default=0.0, name="Specular Intensity", options={"ANIMATABLE"})
+    attenuationNear: bpy.props.FloatProperty(default=2.5, name="attenuationNear", options={"ANIMATABLE"})
+    unknownAt148: bpy.props.FloatProperty(default=2.5, name="unknownAt148", options=set())
+    attenuationFar: bpy.props.FloatProperty(default=3.0, name="attenuationFar", update=handleLightSizeChange, options={"ANIMATABLE"})
+    hotSpot: bpy.props.FloatProperty(default=1.0, name="Hot Spot", options={"ANIMATABLE"})
+    falloff: bpy.props.FloatProperty(default=1.0, name="Fall Off", update=handleLightSizeChange, options={"ANIMATABLE"})
+    unknownAt12: bpy.props.IntProperty(default=-1, name="unknownAt12", options=set())
+    unknownAt8: bpy.props.BoolProperty(default=False,options=set())
+    shadowCast: bpy.props.BoolProperty(options=set())
+    specular: bpy.props.BoolProperty(options=set())
+    unknownFlag0x04: bpy.props.BoolProperty(options=set())
+    turnOn: bpy.props.BoolProperty(default=True,options=set())
     
 class M3BillboardBehavior(bpy.types.PropertyGroup):
     # name is also bone name
-    name = bpy.props.StringProperty(name="name", default="", options=set())
-    billboardType = bpy.props.EnumProperty(default="6", items=billboardBehaviorTypeList, options=set())
+    name: bpy.props.StringProperty(name="name", default="", options=set())
+    billboardType: bpy.props.EnumProperty(default="6", items=billboardBehaviorTypeList, options=set())
                                           
 class ImportPanel(bpy.types.Panel):
     bl_idname = "OBJECT_PT_M3_quickImport"
@@ -3295,8 +3300,8 @@ class M3_MATERIALS_OT_add(bpy.types.Operator):
     bl_label       = "Add M3 Material"
     bl_description = "Adds an material for the export to Starcraft 2"
 
-    defaultSetting = bpy.props.EnumProperty(items=matDefaultSettingsList, options=set(), default="MESH")
-    materialName = bpy.props.StringProperty(name="materialName", default="01", options=set())
+    defaultSetting: bpy.props.EnumProperty(items=matDefaultSettingsList, options=set(), default="MESH")
+    materialName: bpy.props.StringProperty(name="materialName", default="01", options=set())
     
     def invoke(self, context, event):
         scene = context.scene
@@ -3320,8 +3325,8 @@ class M3_MATERIALS_OT_createForMesh(bpy.types.Operator):
     bl_label       = "Creates a M3 Material for the current mesh"
     bl_description = "Creates an m3 material for the current mesh"
 
-    defaultSetting = bpy.props.EnumProperty(items=matDefaultSettingsList, options=set(), default="MESH")
-    materialName = bpy.props.StringProperty(name="materialName", default="01", options=set())
+    defaultSetting: bpy.props.EnumProperty(items=matDefaultSettingsList, options=set(), default="MESH")
+    materialName: bpy.props.StringProperty(name="materialName", default="01", options=set())
     
     def invoke(self, context, event):
         scene = context.scene
@@ -3515,15 +3520,19 @@ def copyCurrentActionOfObjectToM3Animation(objectWithAnimationData, targetAnimat
     targetStrip = getOrCreateStrip(targetAnimation, animationData)
     
     newAction = bpy.data.actions.new(objectWithAnimationData.name + targetAnimation.name)
+    sourceFCurves = shared.getActionFCurves(sourceAction, objectWithAnimationData)
+    targetFCurves = shared.getActionFCurves(
+        newAction, objectWithAnimationData, create=True
+    )
     
-    for sourceCurve in sourceAction.fcurves:
+    for sourceCurve in sourceFCurves:
         path = sourceCurve.data_path
         arrayIndex = sourceCurve.array_index
         if sourceCurve.group != None:
             groupName = sourceCurve.group.name
-            targetCurve = newAction.fcurves.new(path, arrayIndex, groupName)
+            targetCurve = targetFCurves.new(path, arrayIndex, groupName)
         else:
-            targetCurve = newAction.fcurves.new(path, arrayIndex)
+            targetCurve = targetFCurves.new(path, arrayIndex)
         targetCurve.extrapolation = sourceCurve.extrapolation
         targetCurve.color_mode = sourceCurve.color_mode
         targetCurve.color = sourceCurve.color
@@ -3674,11 +3683,11 @@ class M3_ANIMATIONS_OT_STC_select(bpy.types.Operator):
                         bone.select = False
                 # Select object at the end, otherwise Blender 2.63a
                 # does not notice bone selection even if object is already selected
-                obj.select = selectObject
+                obj.select_set(selectObject)
                 if obj.animation_data != None:
                     action = obj.animation_data.action
                     if action != None:
-                        for fcurve in action.fcurves:
+                        for fcurve in shared.getActionFCurves(action, obj):
                             animPath = fcurve.data_path
                             objectId = shared.animObjectIdArmature
                             longAnimId = shared.getLongAnimIdOf(objectId, animPath)
@@ -3687,7 +3696,7 @@ class M3_ANIMATIONS_OT_STC_select(bpy.types.Operator):
         if scene.animation_data != None:
             action = scene.animation_data.action
             if action != None:
-                for fcurve in action.fcurves:
+                for fcurve in shared.getActionFCurves(action, scene):
                     animPath = fcurve.data_path
                     objectId = shared.animObjectIdScene
                     longAnimId = shared.getLongAnimIdOf(objectId, animPath)
@@ -3737,7 +3746,7 @@ class M3_ANIMATIONS_OT_STC_assign(bpy.types.Operator):
         if objectWithAnimData.animation_data != None:
             action = objectWithAnimData.animation_data.action
             if action != None:
-                for fcurve in action.fcurves:
+                for fcurve in shared.getActionFCurves(action, objectWithAnimData):
                     if fcurve.select:
                         animPath = fcurve.data_path
                         yield animPath
@@ -3811,7 +3820,7 @@ class M3_PARTICLE_SYSTEMS_OT_create_spawn_points_from_mesh(bpy.types.Operator):
             activeObject = context.active_object 
             if activeObject != None and activeObject.type == 'MESH':
                 mesh = activeObject.data
-                mesh.update(calc_tessface=True)
+                mesh.update()
                 particleSystem.spawnPoints.clear()
                 for vertex in mesh.vertices:
                     spawnPoint = particleSystem.spawnPoints.add()
@@ -4558,7 +4567,7 @@ class M3_OT_export(bpy.types.Operator, ExportHelper):
     filename_ext = ".m3"
     filter_glob = StringProperty(default="*.m3", options={'HIDDEN'})
 
-    filepath = bpy.props.StringProperty(
+    filepath: bpy.props.StringProperty(
         name="File Path", 
         description="Path of the file that should be created", 
         maxlen= 1024, default= "")
@@ -4587,7 +4596,7 @@ class M3_OT_import(bpy.types.Operator, ImportHelper):
     filename_ext = ".m3"
     filter_glob = StringProperty(default="*.m3;*.m3a", options={'HIDDEN'})
 
-    filepath = bpy.props.StringProperty(
+    filepath: bpy.props.StringProperty(
         name="File Path", 
         description="File path used for importing the simple M3 file", 
         maxlen= 1024, default= "")
@@ -4705,7 +4714,21 @@ def menu_func_export(self, context):
     self.layout.operator(M3_OT_export.bl_idname, text="Starcraft 2 Model (.m3)...")
  
 def register():
-    bpy.utils.register_module(__name__)
+    registerable_types = (
+        bpy.types.PropertyGroup,
+        bpy.types.Operator,
+        bpy.types.Panel,
+        bpy.types.UIList,
+        bpy.types.Menu,
+    )
+    classes = tuple(
+        value for value in globals().values()
+        if isinstance(value, type)
+        and value.__module__ == __name__
+        and any(issubclass(value, base) for base in registerable_types)
+    )
+    for cls in classes:
+        bpy.utils.register_class(cls)
 
     bpy.types.Scene.m3_animation_index = bpy.props.IntProperty(update=handleAnimationSequenceIndexChange, options=set())
     bpy.types.Scene.m3_animation_old_index = bpy.props.IntProperty(options=set())
@@ -4752,8 +4775,8 @@ def register():
     bpy.types.Scene.m3_tight_hit_test = bpy.props.PointerProperty(type=M3SimpleGeometricShape)
     bpy.types.Mesh.m3_material_name = bpy.props.StringProperty(options=set())
     bpy.types.Mesh.m3_physics_mesh = bpy.props.BoolProperty(default=False, options=set(), description="Mark mesh to be used for physics shape only (not exported).")
-    bpy.types.INFO_MT_file_import.append(menu_func_import)
-    bpy.types.INFO_MT_file_export.append(menu_func_export)
+    bpy.types.TOPBAR_MT_file.append(menu_func_import)
+    bpy.types.TOPBAR_MT_file.append(menu_func_export)
     bpy.types.IMAGE_MT_image.append(menu_func_convertNormalMaps)
     bpy.types.Bone.m3_bind_scale = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), size=3, options=set()) 
     bpy.types.EditBone.m3_bind_scale = bpy.props.FloatVectorProperty(default=(1.0, 1.0, 1.0), size=3, options=set()) 
@@ -4762,10 +4785,53 @@ def register():
 
  
 def unregister():
-    bpy.utils.unregister_module(__name__)
-    bpy.types.INFO_MT_file_import.remove(menu_func_import)
-    bpy.types.INFO_MT_file_export.remove(menu_func_export)
+    bpy.types.TOPBAR_MT_file.remove(menu_func_import)
+    bpy.types.TOPBAR_MT_file.remove(menu_func_export)
     bpy.types.IMAGE_MT_image.remove(menu_func_convertNormalMaps)
+
+    scene_properties = (
+        "m3_animation_index", "m3_animation_old_index", "m3_animations",
+        "m3_material_layer_index", "m3_material_references", "m3_standard_materials",
+        "m3_displacement_materials", "m3_composite_materials", "m3_terrain_materials",
+        "m3_volume_materials", "m3_volume_noise_materials", "m3_creep_materials",
+        "m3_stb_materials", "m3_lens_flare_materials", "m3_material_reference_index",
+        "m3_cameras", "m3_camera_index", "m3_particle_systems",
+        "m3_particle_system_index", "m3_ribbons", "m3_ribbon_index", "m3_forces",
+        "m3_force_index", "m3_rigid_bodies", "m3_rigid_body_index", "m3_lights",
+        "m3_light_index", "m3_billboard_behaviors", "m3_billboard_behavior_index",
+        "m3_projections", "m3_projection_index", "m3_warps", "m3_warp_index",
+        "m3_attachment_points", "m3_attachment_point_index", "m3_export_options",
+        "m3_import_options", "m3_bone_visiblity_options", "m3_visibility_test",
+        "m3_animation_ids", "m3_fuzzy_hit_tests", "m3_fuzzy_hit_test_index",
+        "m3_tight_hit_test", "m3_default_value_action_assignments",
+    )
+    for name in scene_properties:
+        if hasattr(bpy.types.Scene, name):
+            delattr(bpy.types.Scene, name)
+    for owner, names in (
+        (bpy.types.Mesh, ("m3_material_name", "m3_physics_mesh")),
+        (bpy.types.Bone, ("m3_bind_scale",)),
+        (bpy.types.EditBone, ("m3_bind_scale",)),
+    ):
+        for name in names:
+            if hasattr(owner, name):
+                delattr(owner, name)
+
+    registerable_types = (
+        bpy.types.PropertyGroup,
+        bpy.types.Operator,
+        bpy.types.Panel,
+        bpy.types.UIList,
+        bpy.types.Menu,
+    )
+    classes = tuple(
+        value for value in globals().values()
+        if isinstance(value, type)
+        and value.__module__ == __name__
+        and any(issubclass(value, base) for base in registerable_types)
+    )
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)
  
 if __name__ == "__main__":
     register()

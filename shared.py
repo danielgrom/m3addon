@@ -23,7 +23,6 @@ import bpy
 import mathutils
 import random
 import math
-from bpy_extras import io_utils
 from os import path
 from bpy_extras import image_utils
 
@@ -156,13 +155,14 @@ def attachmentPointNameFromBoneName(boneName):
     
 
 def setDefaultValue(defaultAction, path, index, value):
+    fcurves = getActionFCurves(defaultAction, create=True)
     curve = None
-    for c in defaultAction.fcurves:
+    for c in fcurves:
         if c.data_path == path  and c.array_index == index:
             curve = c
             break
     if curve == None:
-        curve = defaultAction.fcurves.new(path, index)
+        curve = fcurves.new(path, index)
     keyFrame = curve.keyframe_points.insert(0, value)
     keyFrame.interpolation = "CONSTANT"
 
@@ -501,7 +501,6 @@ def createTextureNodeForM3MaterialLayer(mesh, tree, blenderM3Layer, directoryLis
         return None
     
     textureNode = tree.nodes.new("ShaderNodeTexImage")
-    textureNode.color_space = "COLOR"
     textureNode.projection = "FLAT"
     textureNode.image = image
 
@@ -526,14 +525,15 @@ def createNormalMapNode(mesh, tree, standardMaterial, directoryList):
     normalTextureNode = createTextureNodeForM3MaterialLayer(mesh, tree, normalLayer, directoryList)   
     if normalTextureNode == None:
         return None
-    normalTextureSeparateRGBNode = tree.nodes.new("ShaderNodeSeparateRGB")
-    tree.links.new(normalTextureNode.outputs["Color"], normalTextureSeparateRGBNode.inputs["Image"])
+    normalTextureSeparateRGBNode = tree.nodes.new("ShaderNodeSeparateColor")
+    normalTextureSeparateRGBNode.mode = "RGB"
+    tree.links.new(normalTextureNode.outputs["Color"], normalTextureSeparateRGBNode.inputs["Color"])
 
     # Invert Green of normal texture
     normalTextureGreenInvertNode = tree.nodes.new("ShaderNodeMath")
     normalTextureGreenInvertNode.operation = "SUBTRACT"
     normalTextureGreenInvertNode.inputs[0].default_value = 1.0
-    tree.links.new(normalTextureSeparateRGBNode.outputs["G"], normalTextureGreenInvertNode.inputs[1])
+    tree.links.new(normalTextureSeparateRGBNode.outputs["Green"], normalTextureGreenInvertNode.inputs[1])
 
     # Bring green of normal texture to range [-0.5,0.5]
     normalTextureGreenSubZeroDotFiveNode = tree.nodes.new("ShaderNodeMath")
@@ -593,16 +593,17 @@ def createNormalMapNode(mesh, tree, standardMaterial, directoryList):
     normalTextureNewBlueNode.inputs[1].default_value = 0.5
     tree.links.new(normalTextureNewBluePower2Node.outputs["Value"], normalTextureNewBlueNode.inputs[0])
     
-    normalTextureConvertedNode = tree.nodes.new("ShaderNodeCombineRGB")
-    tree.links.new(normalTextureNode.outputs["Alpha"], normalTextureConvertedNode.inputs["R"])
-    tree.links.new(normalTextureGreenInvertNode.outputs["Value"], normalTextureConvertedNode.inputs["G"])
-    tree.links.new(normalTextureNewBlueNode.outputs["Value"], normalTextureConvertedNode.inputs["B"])
+    normalTextureConvertedNode = tree.nodes.new("ShaderNodeCombineColor")
+    normalTextureConvertedNode.mode = "RGB"
+    tree.links.new(normalTextureNode.outputs["Alpha"], normalTextureConvertedNode.inputs["Red"])
+    tree.links.new(normalTextureGreenInvertNode.outputs["Value"], normalTextureConvertedNode.inputs["Green"])
+    tree.links.new(normalTextureNewBlueNode.outputs["Value"], normalTextureConvertedNode.inputs["Blue"])
 
     normalMapNode = tree.nodes.new('ShaderNodeNormalMap')
     normalMapNode.space = "TANGENT"
     normalMapNode.inputs["Strength"].default_value = 0.5
     normalMapNode.uv_map = convertM3UVSourceValueToUVLayerName(mesh, normalLayer.uvSource)
-    tree.links.new(normalTextureConvertedNode.outputs["Image"], normalMapNode.inputs["Color"])
+    tree.links.new(normalTextureConvertedNode.outputs["Color"], normalMapNode.inputs["Color"])
 
     return normalMapNode
 
@@ -698,15 +699,16 @@ def createCyclesMaterialForMeshObject(scene, meshObject):
         if alphaLayer.colorChannelSetting == colorChannelSettingA:
             tree.links.new(alphaTextureNode.outputs["Alpha"], mixShaderNode.inputs["Fac"])
         else:
-            separateRGBNode = tree.nodes.new("ShaderNodeSeparateRGB")
-            tree.links.new(alphaTextureNode.outputs["Color"], separateRGBNode.inputs["Image"])
+            separateRGBNode = tree.nodes.new("ShaderNodeSeparateColor")
+            separateRGBNode.mode = "RGB"
+            tree.links.new(alphaTextureNode.outputs["Color"], separateRGBNode.inputs["Color"])
             
             if alphaLayer.colorChannelSetting == colorChannelSettingR:
-               tree.links.new(separateRGBNode.outputs["R"], mixShaderNode.inputs["Fac"])
+               tree.links.new(separateRGBNode.outputs["Red"], mixShaderNode.inputs["Fac"])
             elif alphaLayer.colorChannelSetting == colorChannelSettingG:
-               tree.links.new(separateRGBNode.outputs["G"], mixShaderNode.inputs["Fac"])
+               tree.links.new(separateRGBNode.outputs["Green"], mixShaderNode.inputs["Fac"])
             elif alphaLayer.colorChannelSetting == colorChannelSettingB:
-               tree.links.new(separateRGBNode.outputs["B"], mixShaderNode.inputs["Fac"])
+               tree.links.new(separateRGBNode.outputs["Blue"], mixShaderNode.inputs["Fac"])
             else:
                 raise Exception("alpha texture setting not handled properly earilier")
         finalShaderOutputSocket = mixShaderNode.outputs["Shader"] 
@@ -882,11 +884,7 @@ def createClassicBlenderMaterialForMeshObject(scene, meshObject):
     mesh.materials.append(realMaterial)
 
 def createBlenderMaterialForMeshObject(scene, meshObject):
-    renderEngine = scene.render.engine
-    if renderEngine == 'CYCLES':
-        createCyclesMaterialForMeshObject(scene, meshObject)
-    else:
-        createClassicBlenderMaterialForMeshObject(scene, meshObject)
+    createCyclesMaterialForMeshObject(scene, meshObject)
 
 
 def createBlenderMaterialsFromM3Materials(scene):
@@ -899,7 +897,7 @@ def composeMatrix(location, rotation, scale):
     scaleMatrix = mathutils.Matrix()
     for i in range(3):
         scaleMatrix[i][i] = scale[i]
-    return locMatrix * rotationMatrix * scaleMatrix
+    return locMatrix @ rotationMatrix @ scaleMatrix
             
 def getLongAnimIdOf(objectId, animPath):
     if objectId == animObjectIdScene and animPath.startswith("m3_boundings"):
@@ -921,15 +919,10 @@ def createHiddenMeshObject(name, untransformedPositions, faces, matrix):
 
     transformedPositions = []
     for v in untransformedPositions:
-        transformedPositions.append(matrix * mathutils.Vector(v))
+        transformedPositions.append(matrix @ mathutils.Vector(v))
 
-    mesh.vertices.add(len(transformedPositions))
-    mesh.vertices.foreach_set("co", io_utils.unpack_list(transformedPositions))
-
-    mesh.tessfaces.add(len(faces))
-    mesh.tessfaces.foreach_set("vertices_raw", io_utils.unpack_face_list(faces))
-    
-    mesh.update(calc_edges=True)
+    mesh.from_pydata(transformedPositions, [], faces)
+    mesh.update()
     return meshObject
 
 def setBoneVisibility(scene, boneName, visibility):
@@ -1119,7 +1112,7 @@ def createPhysicsShapeMeshData(shape):
         faces = [f.vertices for f in mesh.polygons]
     
     matrix = composeMatrix(shape.offset, shape.rotationEuler, shape.scale)
-    vertices = [matrix * mathutils.Vector(v) for v in vertices]
+    vertices = [matrix @ mathutils.Vector(v) for v in vertices]
     
     return vertices, faces
 
@@ -1156,14 +1149,14 @@ def removeRigidBodyBoneShape(scene, rigidBody):
 
 def updateBoneShape(bone, poseBone, meshName, untransformedPositions, faces, matrix=mathutils.Matrix()):
     # Undo the rotation fix:
-    matrix = rotFixMatrixInverted * matrix
+    matrix = rotFixMatrixInverted @ matrix
     boneScale = (bone.head - bone.tail).length
     invertedBoneScale = 1.0 / boneScale
     scaleMatrix = mathutils.Matrix()
     scaleMatrix[0][0] = invertedBoneScale
     scaleMatrix[1][1] = invertedBoneScale
     scaleMatrix[2][2] = invertedBoneScale
-    matrix = scaleMatrix * matrix
+    matrix = scaleMatrix @ matrix
     
     #TODO reuse existing mesh of bone if it exists
     poseBone.custom_shape = createHiddenMeshObject(meshName, untransformedPositions, faces, matrix)
@@ -1328,6 +1321,60 @@ def typeIdOfObject(obj):
     else:
         raise Exception("Can't determine type id for type %s yet" % objectType)
 
+def getActionChannelbag(action, owner=None, create=False):
+    if action is None:
+        return None
+
+    animationData = getattr(owner, "animation_data", None)
+    slot = None
+    if animationData is not None and animationData.action == action:
+        slot = animationData.action_slot
+
+    if slot is None:
+        matchingSlots = list(action.slots)
+        if owner is not None:
+            ownerType = typeIdOfObject(owner)
+            matchingSlots = [
+                candidate for candidate in matchingSlots
+                if candidate.target_id_type in {ownerType, "UNSPECIFIED"}
+            ]
+            namedSlots = [
+                candidate for candidate in matchingSlots
+                if candidate.name_display == owner.name
+            ]
+            if namedSlots:
+                matchingSlots = namedSlots
+        if matchingSlots:
+            slot = matchingSlots[0]
+        elif create and owner is not None:
+            slot = action.slots.new(
+                id_type=typeIdOfObject(owner),
+                name=owner.name,
+            )
+
+    if slot is None:
+        return None
+
+    if len(action.layers) == 0:
+        if not create:
+            return None
+        layer = action.layers.new("M3")
+    else:
+        layer = action.layers[0]
+
+    if len(layer.strips) == 0:
+        if not create:
+            return None
+        strip = layer.strips.new(type="KEYFRAME")
+    else:
+        strip = layer.strips[0]
+
+    return strip.channelbag(slot, ensure=create)
+
+def getActionFCurves(action, owner=None, create=False):
+    channelbag = getActionChannelbag(action, owner, create)
+    return channelbag.fcurves if channelbag is not None else ()
+
 def getOrCreateTrack(animationData, trackName):
     track = animationData.nla_tracks.get(trackName)
     if track == None:
@@ -1348,7 +1395,7 @@ def getOrCreateDefaultActionFor(objectWithAnimationData):
     else:
         stripName = "Default Values"
         defaultAction = bpy.data.actions.new("DEFAULTS_FOR_" + objectWithAnimationData.name)
-        defaultAction.id_root = typeIdOfObject(objectWithAnimationData)
+        getActionChannelbag(defaultAction, objectWithAnimationData, create=True)
         strip = defaultValuesTrack.strips.new(name=stripName, start=0, action=defaultAction)
     return defaultAction
 
